@@ -285,9 +285,11 @@ jobs:
             PGPASSWORD=ci psql -h localhost -U postgres -d cobol_api -tAc \
             'SELECT count(*) FROM taux_effectifs_moyens')
           test "$n" = "8"
+          # Autant de lignes que de fichiers de migration embarques.
+          attendu=$(ls internal/db/migrations/*.sql | wc -l | tr -d ' ')
           v=$(PGPASSWORD=ci psql -h localhost -U postgres -d cobol_api -tAc \
             'SELECT count(*) FROM schema_migrations')
-          test "$v" = "2"
+          test "$v" = "$attendu"
 
       - name: Verifier le refus sans cle
         run: |
