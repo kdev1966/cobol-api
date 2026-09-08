@@ -216,6 +216,17 @@
               ],
               "default": "aucune"
             }
+          },
+          {
+            "name": "taux_usure",
+            "in": "query",
+            "required": false,
+            "description": "Plafond reglementaire que le TAEG ne doit pas depasser, en pourcent. Fourni, la reponse porte un verdict de conformite et la marge ; omis, le TAEG est rendu sans jugement. Un TAEG egal au plafond reste licite : le depassement est strict.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,2}(\\.\\d{1,4})?$"
+            },
+            "example": "5.88"
           }
         ],
         "responses": {
@@ -395,6 +406,11 @@
               "capital_initial",
               "capital_restant_du"
             ]
+          },
+          "taux_usure": {
+            "type": "string",
+            "description": "Absent quand aucun plafond n'est demande.",
+            "example": "5.8800"
           }
         }
       },
@@ -409,7 +425,10 @@
           "total_frais",
           "total_verse",
           "cout_credit",
-          "taeg"
+          "taeg",
+          "taux_usure",
+          "conforme",
+          "marge_usure"
         ],
         "properties": {
           "echeances": {
@@ -453,6 +472,30 @@
             "type": "number",
             "description": "Taux annuel effectif global en pourcent, a quatre decimales, resolu par dichotomie sur les flux reels.",
             "example": 3.9926
+          },
+          "taux_usure": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Plafond applique. Nul quand aucune verification n'a ete demandee.",
+            "example": 5.88
+          },
+          "conforme": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Vrai si le TAEG ne depasse pas le plafond. Nul quand aucune verification n'a ete demandee.",
+            "example": true
+          },
+          "marge_usure": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Plafond moins TAEG, en points de pourcentage. Negatif si le pret est usuraire.",
+            "example": 2.3749
           }
         }
       },

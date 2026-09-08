@@ -116,6 +116,9 @@ type Parametres struct {
 	FraisGarantie string
 	TauxAssurance string
 	Assiette      string
+	// TauxUsure est le plafond reglementaire. Vide ou absent, aucune
+	// verification n'est demandee.
+	TauxUsure string
 }
 
 // montantOuZero convertit un montant facultatif : vide vaut zero.
@@ -215,6 +218,26 @@ func ParseDemande(p Parametres) (Demande, error) {
 			"doit valoir " + strings.Join(AssiettesAcceptees(), ", ")}
 	}
 
+	var tauxUsure int64
+	var tauxUsureAffiche *string
+	if brut := strings.TrimSpace(p.TauxUsure); brut != "" {
+		tauxUsure, err = decimalVersEntier(brut, 4)
+		if err != nil {
+			return Demande{}, &ErreurValidation{"taux_usure", err.Error()}
+		}
+		// Le champ COBOL est un PIC 9(2)V9(4).
+		if tauxUsure > 999999 {
+			return Demande{}, &ErreurValidation{"taux_usure",
+				"doit etre compris entre 0 et 99.9999"}
+		}
+		if tauxUsure == 0 {
+			return Demande{}, &ErreurValidation{"taux_usure",
+				"un plafond nul n'a pas de sens ; omettre le parametre pour ne pas verifier"}
+		}
+		affiche := formaterEchelle(tauxUsure, 4)
+		tauxUsureAffiche = &affiche
+	}
+
 	return Demande{
 		CapitalCentimes:       centimes,
 		TauxMillioniemes:      millioniemes,
@@ -231,6 +254,8 @@ func ParseDemande(p Parametres) (Demande, error) {
 		FraisGarantie:         formaterEchelle(fraisGarantie, 2),
 		TauxAssurance:         formaterEchelle(tauxAssurance, 6),
 		AssietteAssur:         libellesAssiette[codeAssiette],
+		TauxUsureDixMillieme:  tauxUsure,
+		TauxUsure:             tauxUsureAffiche,
 	}, nil
 }
 

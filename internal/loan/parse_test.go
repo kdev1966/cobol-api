@@ -105,16 +105,16 @@ func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
 
 	ligne := ligneEntree(d)
 	// 13 chiffres de capital, 8 de taux, 4 de duree, 11 de frais de dossier,
-	// 11 de frais de garantie, 8 de taux d'assurance, puis les lettres de la
-	// methode et de l'assiette. La longueur est un contrat avec le PIC X(57)
-	// du COBOL.
+	// 11 de frais de garantie, 8 de taux d'assurance, 6 de taux d'usure, puis
+	// les lettres de la methode et de l'assiette. La longueur est un contrat
+	// avec le PIC X(63) du COBOL.
 	want := "0000025000000034500000240" + "00000000000" + "00000000000" +
-		"00000000" + "AN\n"
+		"00000000" + "000000" + "AN\n"
 	if ligne != want {
 		t.Errorf("ligneEntree = %q, attendu %q", ligne, want)
 	}
-	if len(ligne)-1 != 57 {
-		t.Errorf("longueur %d, attendu 57", len(ligne)-1)
+	if len(ligne)-1 != 63 {
+		t.Errorf("longueur %d, attendu 63", len(ligne)-1)
 	}
 
 	// Les frais et l'assurance doivent se retrouver a leurs positions.
@@ -136,8 +136,23 @@ func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
 	if got := l[47:55]; got != "00360000" {
 		t.Errorf("taux d'assurance a la position 48 : %q", got)
 	}
-	if got := l[55:57]; got != "AR" {
+	if got := l[61:63]; got != "AR" {
 		t.Errorf("lettres de methode et d'assiette : %q", got)
+	}
+
+	// Le plafond d'usure occupe six chiffres avant les deux lettres.
+	avecUsure, err := ParseDemande(Parametres{
+		Capital: "250000.00", Taux: "3.45", Mois: "240", TauxUsure: "5.88",
+	})
+	if err != nil {
+		t.Fatalf("ParseDemande : %v", err)
+	}
+	if got := ligneEntree(avecUsure)[55:61]; got != "058800" {
+		t.Errorf("taux d'usure a la position 56 : %q", got)
+	}
+	// Sans plafond, le champ reste a zero.
+	if got := ligne[55:61]; got != "000000" {
+		t.Errorf("sans plafond, le champ devrait etre nul : %q", got)
 	}
 
 	// Chaque methode doit poser sa lettre.
@@ -150,7 +165,7 @@ func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ParseDemande(%q) : %v", saisie, err)
 		}
-		if got := ligneEntree(d)[55]; got != lettre {
+		if got := ligneEntree(d)[61]; got != lettre {
 			t.Errorf("methode %q : lettre %q, attendu %q", saisie, got, lettre)
 		}
 	}
@@ -243,6 +258,28 @@ func TestParseDemandeRefuseLesFraisAberrants(t *testing.T) {
 		invalide, ok := err.(*ErreurValidation)
 		if !ok || invalide.Champ != c.champ {
 			t.Errorf("%s : erreur %v, champ attendu %q", c.nom, err, c.champ)
+		}
+	}
+}
+
+func TestParseDemandeRefuseUnPlafondAberrant(t *testing.T) {
+	cas := []struct{ nom, plafond string }{
+		{"nul", "0"},
+		{"hors bornes", "100"},
+		{"non numerique", "abc"},
+		{"negatif", "-5"},
+	}
+	for _, c := range cas {
+		_, err := ParseDemande(Parametres{
+			Capital: "1000.00", Taux: "3.45", Mois: "12", TauxUsure: c.plafond,
+		})
+		if err == nil {
+			t.Errorf("plafond %s : aurait du echouer", c.nom)
+			continue
+		}
+		invalide, ok := err.(*ErreurValidation)
+		if !ok || invalide.Champ != "taux_usure" {
+			t.Errorf("plafond %s : erreur %v, champ attendu taux_usure", c.nom, err)
 		}
 	}
 }

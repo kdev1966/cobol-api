@@ -34,9 +34,12 @@ func binaire(t *testing.T) string {
 func recap(echeances int, premiere, derniere, interets, total string) string {
 	// assurance, frais et cout sont a zero : les tests de lecture portent sur
 	// le decoupage, pas sur le calcul.
-	return fmt.Sprintf("R%04d%013s%013s%015s%015s%013s%015s%015s%06d",
+	// Ni assurance, ni frais, ni verification d'usure : les tests de lecture
+	// portent sur le decoupage, pas sur le calcul.
+	return fmt.Sprintf("R%04d%013s%013s%015s%015s%013s%015s%015s%06d%06d%s%s",
 		echeances, premiere, derniere, interets,
-		"000000000000000", "0000000000000", total, interets, 35051)
+		"000000000000000", "0000000000000", total, interets, 35051,
+		0, "-", "+000000")
 }
 
 func echeance(n int, mensualite, interets, capital, solde string) string {
@@ -598,6 +601,122 @@ func TestLesFraisEtLAssuranceRencherissentLeTaeg(t *testing.T) {
 	for _, e := range surInitial.Echeancier {
 		if e.Assurance.String() != ref {
 			t.Fatalf("prime %s a l'echeance %d, attendu %s constante", e.Assurance, e.N, ref)
+		}
+	}
+}
+
+func TestVerdictDUsure(t *testing.T) {
+	moteur := NewMoteur(binaire(t), 0)
+
+	calculer := func(plafond string) *Echeancier {
+		t.Helper()
+		d, err := ParseDemande(Parametres{
+			Capital: "250000.00", Taux: "3.45", Mois: "240", TauxUsure: plafond,
+		})
+		if err != nil {
+			t.Fatalf("ParseDemande(%q) : %v", plafond, err)
+		}
+		res, err := moteur.Calculer(context.Background(), d)
+		if err != nil {
+			t.Fatalf("Calculer : %v", err)
+		}
+		return res
+	}
+
+	// Sans plafond, le TAEG est rendu sans jugement.
+	sans := calculer("").Recapitulatif
+	if sans.Conforme != nil || sans.TauxUsure != nil || sans.MargeUsure != nil {
+		t.Errorf("sans plafond, le verdict devrait etre nul : %+v", sans)
+	}
+	if sans.Taeg.String() != "3.5051" {
+		t.Errorf("taeg %s, attendu 3.5051", sans.Taeg)
+	}
+
+	cas := []struct {
+		nom      string
+		plafond  string
+		conforme bool
+		marge    string
+	}{
+		{"largement conforme", "5.88", true, "2.3749"},
+		// Un TAEG egal au plafond reste licite : le depassement est strict.
+		{"egal au plafond", "3.5051", true, "0.0000"},
+		{"depassement d'un point de base", "3.5", false, "-0.0051"},
+		{"plafond derisoire", "1", false, "-2.5051"},
+	}
+
+	for _, c := range cas {
+		r := calculer(c.plafond).Recapitulatif
+		if r.Conforme == nil {
+			t.Errorf("%s : verdict absent", c.nom)
+			continue
+		}
+		if *r.Conforme != c.conforme {
+			t.Errorf("%s : conforme=%v, attendu %v", c.nom, *r.Conforme, c.conforme)
+		}
+		if r.MargeUsure.String() != c.marge {
+			t.Errorf("%s : marge %s, attendu %s", c.nom, r.MargeUsure, c.marge)
+		}
+		if r.TauxUsure == nil {
+			t.Errorf("%s : le plafond devrait etre rendu", c.nom)
+		}
+	}
+}
+
+// Les frais et l'assurance font monter le TAEG : un pret licite nu peut
+// devenir usuraire une fois tous les couts integres. C'est precisement ce que
+// la reglementation vise, et le service doit le voir.
+func TestUnPretLiciteNuPeutDevenirUsuraire(t *testing.T) {
+	moteur := NewMoteur(binaire(t), 0)
+
+	verdict := func(p Parametres) (bool, string) {
+		t.Helper()
+		p.Capital, p.Taux, p.Mois, p.TauxUsure = "250000.00", "3.45", "240", "3.9"
+		d, err := ParseDemande(p)
+		if err != nil {
+			t.Fatalf("ParseDemande : %v", err)
+		}
+		res, err := moteur.Calculer(context.Background(), d)
+		if err != nil {
+			t.Fatalf("Calculer : %v", err)
+		}
+		if res.Recapitulatif.Conforme == nil {
+			t.Fatal("verdict absent")
+		}
+		return *res.Recapitulatif.Conforme, res.Recapitulatif.Taeg.String()
+	}
+
+	if ok, taeg := verdict(Parametres{}); !ok {
+		t.Errorf("nu : taeg %s devrait passer sous un plafond de 3.9", taeg)
+	}
+	if ok, taeg := verdict(Parametres{
+		TauxAssurance: "0.36", Assiette: "capital_initial",
+	}); ok {
+		t.Errorf("avec assurance : taeg %s devrait depasser le plafond de 3.9", taeg)
+	}
+}
+
+func TestNombreSigne(t *testing.T) {
+	cas := []struct{ champ, attendu string }{
+		{"+023749", "2.3749"},
+		{"-000051", "-0.0051"},
+		{"+000000", "0.0000"},
+		// Le zero negatif ne doit pas ressortir avec un signe.
+		{"-000000", "0.0000"},
+	}
+	for _, c := range cas {
+		got, err := nombreSigne(c.champ, 4)
+		if err != nil {
+			t.Errorf("nombreSigne(%q) : %v", c.champ, err)
+			continue
+		}
+		if got.String() != c.attendu {
+			t.Errorf("nombreSigne(%q) = %q, attendu %q", c.champ, got, c.attendu)
+		}
+	}
+	for _, mauvais := range []string{"", "+", "x000000", "0000000"} {
+		if _, err := nombreSigne(mauvais, 4); err == nil {
+			t.Errorf("nombreSigne(%q) aurait du echouer", mauvais)
 		}
 	}
 }

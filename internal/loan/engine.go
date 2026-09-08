@@ -45,6 +45,9 @@ type Demande struct {
 	FraisDossierCentimes  int64 `json:"-"`
 	FraisGarantieCentimes int64 `json:"-"`
 	TauxAssuranceMillion  int64 `json:"-"`
+	// TauxUsureDixMillieme porte le plafond reglementaire, 5.88 % valant
+	// 58800. Zero signifie qu'aucune verification n'est demandee.
+	TauxUsureDixMillieme int64 `json:"-"`
 
 	Mois          int    `json:"mois"`
 	Capital       string `json:"capital"`
@@ -54,6 +57,8 @@ type Demande struct {
 	FraisGarantie string `json:"frais_garantie"`
 	TauxAssurance string `json:"taux_assurance"`
 	AssietteAssur string `json:"assiette_assurance"`
+	// TauxUsure est absent de la reponse quand aucun plafond n'est demande.
+	TauxUsure *string `json:"taux_usure,omitempty"`
 }
 
 // Format des enregistrements rendus par le programme COBOL. Les positions
@@ -61,7 +66,7 @@ type Demande struct {
 const (
 	tagRecap     = 'R'
 	tagEcheance  = 'E'
-	longRecap    = 110
+	longRecap    = 124
 	longEcheance = 83
 )
 
@@ -90,6 +95,12 @@ type Recapitulatif struct {
 	// Des lors que des frais ou une assurance entrent dans les flux, aucune
 	// formule fermee ne le donne : il est resolu par dichotomie.
 	Taeg json.Number `json:"taeg"`
+
+	// Les trois champs suivants sont nuls quand aucun plafond n'a ete
+	// fourni : le service rend alors le TAEG sans le juger.
+	TauxUsure  *json.Number `json:"taux_usure"`
+	Conforme   *bool        `json:"conforme"`
+	MargeUsure *json.Number `json:"marge_usure"`
 }
 
 // Echeance est une ligne de l'echeancier.
@@ -142,15 +153,16 @@ func NewMoteur(chemin string, delai time.Duration) *Moteur {
 	return &Moteur{Chemin: chemin, Delai: delai}
 }
 
-// ligneEntree rend les 57 caracteres attendus par le programme : capital
+// ligneEntree rend les 63 caracteres attendus par le programme : capital
 // 9(11)V99, taux 9(2)V9(6), duree 9(4), frais de dossier et de garantie
-// 9(9)V99, taux d'assurance 9(2)V9(6), puis les lettres de la methode et de
-// l'assiette d'assurance.
+// 9(9)V99, taux d'assurance 9(2)V9(6), taux d'usure 9(2)V9(4), puis les
+// lettres de la methode et de l'assiette d'assurance.
 func ligneEntree(d Demande) string {
-	return fmt.Sprintf("%013d%08d%04d%011d%011d%08d%c%c\n",
+	return fmt.Sprintf("%013d%08d%04d%011d%011d%08d%06d%c%c\n",
 		d.CapitalCentimes, d.TauxMillioniemes, d.Mois,
 		d.FraisDossierCentimes, d.FraisGarantieCentimes,
-		d.TauxAssuranceMillion, d.CodeMethode, d.CodeAssiette)
+		d.TauxAssuranceMillion, d.TauxUsureDixMillieme,
+		d.CodeMethode, d.CodeAssiette)
 }
 
 // Calculer produit l'echeancier de la demande.
@@ -291,7 +303,52 @@ func lireRecapitulatif(ligne string, r *Recapitulatif) error {
 	if r.Taeg, err = nombre(ligne[104:110], 4); err != nil {
 		return fmt.Errorf("recapitulatif illisible : %w", err)
 	}
-	return nil
+
+	// Le verdict d'usure : "-" quand aucun plafond n'a ete demande, auquel
+	// cas les trois champs restent nuls.
+	switch ligne[116] {
+	case '-':
+		return nil
+	case 'O', 'N':
+		conforme := ligne[116] == 'O'
+		usure, err := nombre(ligne[110:116], 4)
+		if err != nil {
+			return fmt.Errorf("recapitulatif illisible : %w", err)
+		}
+		marge, err := nombreSigne(ligne[117:124], 4)
+		if err != nil {
+			return fmt.Errorf("recapitulatif illisible : %w", err)
+		}
+		r.TauxUsure, r.Conforme, r.MargeUsure = &usure, &conforme, &marge
+		return nil
+	default:
+		return fmt.Errorf("recapitulatif illisible : conformite %q inattendue",
+			ligne[116])
+	}
+}
+
+// nombreSigne lit un champ COBOL a signe separe en tete : un caractere de
+// signe, puis les chiffres.
+func nombreSigne(champ string, decimales int) (json.Number, error) {
+	if len(champ) < 2 {
+		return "", fmt.Errorf("valeur signee trop courte : %q", champ)
+	}
+	valeur, err := nombre(champ[1:], decimales)
+	if err != nil {
+		return "", err
+	}
+	switch champ[0] {
+	case '+':
+		return valeur, nil
+	case '-':
+		// Un zero negatif n'existe pas dans la reponse.
+		if strings.Trim(valeur.String(), "0.") == "" {
+			return valeur, nil
+		}
+		return json.Number("-" + valeur.String()), nil
+	default:
+		return "", fmt.Errorf("signe %q inattendu", champ[0])
+	}
 }
 
 func lireEcheance(ligne string, e *Echeance) error {

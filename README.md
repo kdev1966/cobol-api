@@ -94,6 +94,29 @@ Sur 250 000 € à 3,45 % sur 240 mois :
 Chaque ligne de l'échéancier distingue `echeance` (capital + intérêts) de
 `mensualite` (échéance + assurance), ce que l'emprunteur verse réellement.
 
+## Le taux d'usure
+
+Le taux d'usure est le plafond réglementaire qu'un TAEG ne doit pas dépasser ;
+au-delà, le prêt est usuraire, donc illicite. Passer `taux_usure` fait rendre
+un verdict :
+
+```json
+"taux_usure": 5.88, "conforme": true, "marge_usure": 2.3749
+```
+
+Sans ce paramètre, les trois champs sont `null` : le service rend le TAEG sans
+le juger. Un TAEG **égal** au plafond reste licite — le dépassement est strict.
+
+C'est ici que les frais et l'assurance prennent tout leur sens. Sur 250 000 € à
+3,45 % sur 240 mois avec un plafond de 3,9 %, le prêt nu passe à 3,5051 % ;
+avec une assurance à 0,36 % sur le capital initial il monte à 4,1020 % et
+devient **usuraire**. C'est précisément ce que la réglementation vise, et la
+suite de tests le vérifie comme tel.
+
+Le plafond est un paramètre, pas une donnée du service : sa valeur dépend de la
+catégorie de prêt et change chaque trimestre. Le programme COBOL porte la
+règle — comparer, calculer la marge, statuer — et non la donnée.
+
 ## Le TAEG
 
 Le TAEG rendu est le taux actuariel annuel qui égalise la valeur actuelle des
@@ -137,7 +160,7 @@ jusqu'à la réponse.
 |---|---|---|---|
 | `GET` | `/` | non | Index du service |
 | `GET` | `/openapi.json` | non | Spécification OpenAPI 3.1 |
-| `GET` | `/v1/loans/schedule?capital=&taux=&mois=&methode=` | oui | Échéancier de prêt |
+| `GET` | `/v1/loans/schedule?capital=&taux=&mois=&methode=…` | oui | Échéancier de prêt |
 | `GET` | `/health` | non | État du service ; `503` si le binaire COBOL manque |
 
 Les routes métier sont versionnées. Le format du récapitulatif a déjà changé
@@ -180,18 +203,19 @@ donc en tenir compte avant de se fier au plafond.
 ## Contrat du programme COBOL
 
 Le binaire est autonome et testable sans la couche Go. Il lit sur son entrée
-standard **une ligne de 57 caractères** — capital `9(11)V99`, taux annuel
+standard **une ligne de 63 caractères** — capital `9(11)V99`, taux annuel
 `9(2)V9(6)`, durée `9(4)`, frais de dossier et de garantie `9(9)V99`, taux
-d'assurance `9(2)V9(6)`, puis les lettres de la méthode (`A`, `C`, `I`) et de
-l'assiette d'assurance (`N`, `I`, `R`) — et écrit des enregistrements à largeur
-fixe :
+d'assurance `9(2)V9(6)`, taux d'usure `9(2)V9(4)`, puis les lettres de la
+méthode (`A`, `C`, `I`) et de l'assiette d'assurance (`N`, `I`, `R`) — et écrit
+des enregistrements à largeur fixe :
 
 ```
 R + échéances 9(4) + première et dernière mensualité 9(11)V99
                    + total intérêts et total assurance 9(13)V99
                    + total frais 9(9)V99
                    + total versé et coût du crédit 9(13)V99
-                   + TAEG 9(2)V9(4)                                          110 car.
+                   + TAEG et taux d'usure 9(2)V9(4)
+                   + conformité X + marge S9(2)V9(4) à signe séparé           124 car.
 E + numéro    9(4) + échéance, intérêts, capital, assurance,
                      mensualité, solde 9(11)V99                               83 car.
 ```
@@ -271,5 +295,5 @@ privilégié et n'écrit rien sur disque.
 - Le taux périodique est **proportionnel** (taux nominal annuel divisé par
   douze), et non le taux actuariel équivalent. C'est un choix, pas un oubli.
 - Pas d'échéances irrégulières, de différé d'amortissement ni de remboursement anticipé.
-- Le taux d'usure n'est pas vérifié : le service ne dit pas si le TAEG rendu
-  dépasse le plafond réglementaire de la catégorie de prêt.
+- Le plafond d'usure doit être fourni par l'appelant : le service ne connaît
+  pas le barème trimestriel par catégorie de prêt.

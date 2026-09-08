@@ -154,6 +154,23 @@ jobs:
             "$base&frais_dossier=999999999.99")
           test "$code" = "400"
 
+      # Un pret licite nu peut devenir usuraire une fois l'assurance integree.
+      - name: Verifier le verdict d'usure
+        run: |
+          base='http://localhost:3000/v1/loans/schedule?capital=250000.00&taux=3.45&mois=240'
+
+          sans=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base")
+          echo "$sans" | grep -q '"conforme":null'
+
+          licite=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base&taux_usure=3.9")
+          echo "$licite" | grep -q '"conforme":true'
+          echo "$licite" | grep -q '"marge_usure":0.3949'
+
+          usuraire=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            "$base&taux_usure=3.9&taux_assurance=0.36&assiette_assurance=capital_initial")
+          echo "$usuraire" | grep -q '"conforme":false'
+          echo "$usuraire" | grep -q '"marge_usure":-0.2020'
+
       - name: Verifier la specification OpenAPI
         run: |
           spec=$(curl -sf http://localhost:3000/openapi.json)

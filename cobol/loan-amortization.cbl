@@ -28,21 +28,31 @@
       *>   I  capital initial   : prime constante sur toute la duree
       *>   R  capital restant du : prime decroissante
       *>
-      *> Entree : une ligne de 57 caracteres sur stdin
+      *> Le taux d'usure est le plafond reglementaire que le TAEG ne doit pas
+      *> depasser. Il est fourni en entree : sa lecture, qui depend d'un
+      *> bareme trimestriel, releve de l'appelant. Ce programme garde la
+      *> regle, comparer et statuer. Un plafond nul signifie qu'aucune
+      *> verification n'est demandee.
+      *>
+      *> Entree : une ligne de 63 caracteres sur stdin
       *>            capital         9(11)V99   positions  1-13
       *>            taux annuel     9(2)V9(6)  positions 14-21
       *>            duree mois      9(4)       positions 22-25
       *>            frais dossier   9(9)V99    positions 26-36
       *>            frais garantie  9(9)V99    positions 37-47
       *>            taux assurance  9(2)V9(6)  positions 48-55
-      *>            methode         X          position     56
-      *>            assiette assur. X          position     57
+      *>            taux usure      9(2)V9(4)  positions 56-61
+      *>                            (zero = aucune verification)
+      *>            methode         X          position     62
+      *>            assiette assur. X          position     63
       *>
       *> Sortie : enregistrements a largeur fixe, un par ligne.
       *>          "R" recapitulatif : echeances 9(4), premiere et derniere
       *>              echeance 9(11)V99, total interets, total assurance
       *>              9(13)V99, total frais 9(11)V99, total du et cout du
-      *>              credit 9(13)V99, taeg 9(2)V9(4)         -> 110 car.
+      *>              credit 9(13)V99, taeg 9(2)V9(4), taux d'usure
+      *>              9(2)V9(4), conformite X, marge S9(2)V9(4) a signe
+      *>              separe                                  -> 124 car.
       *>          "E" echeance      : numero 9(4), echeance, interets,
       *>              capital, assurance, du, solde 9(11)V99   -> 83 car.
       *>
@@ -66,9 +76,9 @@
        DATA DIVISION.
        WORKING-STORAGE SECTION.
 
-       01 WS-ENTREE             PIC X(57) VALUE SPACES.
+       01 WS-ENTREE             PIC X(63) VALUE SPACES.
        01 WS-ENTREE-CHAMPS REDEFINES WS-ENTREE.
-          05 WS-E-CHIFFRES      PIC X(55).
+          05 WS-E-CHIFFRES      PIC X(61).
           05 WS-E-METHODE       PIC X.
           05 WS-E-ASSIETTE      PIC X.
        01 WS-E-DETAIL REDEFINES WS-ENTREE.
@@ -78,6 +88,7 @@
           05 WS-E-FRAIS-DOSSIER PIC 9(9)V99.
           05 WS-E-FRAIS-GARANTIE PIC 9(9)V99.
           05 WS-E-TAUX-ASSUR    PIC 9(2)V9(6).
+          05 WS-E-TAUX-USURE    PIC 9(2)V9(4).
           05 FILLER             PIC X(2).
 
        78 METHODE-ANNUITE       VALUE "A".
@@ -86,6 +97,12 @@
        78 ASSIETTE-AUCUNE       VALUE "N".
        78 ASSIETTE-INITIAL      VALUE "I".
        78 ASSIETTE-RESTANT      VALUE "R".
+       78 CONFORME-OUI          VALUE "O".
+       78 CONFORME-NON          VALUE "N".
+       78 CONFORME-SANS-OBJET   VALUE "-".
+
+       01 WS-CONFORME           PIC X      VALUE "-".
+       01 WS-MARGE              PIC S9(2)V9(4) VALUE 0.
 
        01 WS-TAUX-MENSUEL       PIC 9V9(18)    VALUE 0.
        01 WS-TAUX-ASSUR-MENSUEL PIC 9V9(18)    VALUE 0.
@@ -144,6 +161,9 @@
           05 WS-R-TOTAL-DU      PIC 9(13)V99   VALUE 0.
           05 WS-R-COUT          PIC 9(13)V99   VALUE 0.
           05 WS-R-TAEG          PIC 9(2)V9(4)  VALUE 0.
+          05 WS-R-TAUX-USURE    PIC 9(2)V9(4)  VALUE 0.
+          05 WS-R-CONFORME      PIC X          VALUE "-".
+          05 WS-R-MARGE         PIC S9(2)V9(4) SIGN IS LEADING SEPARATE.
 
        01 WS-LIGNE.
           05 FILLER             PIC X          VALUE "E".
@@ -164,6 +184,7 @@
            MOVE "N" TO WS-EMETTRE
            PERFORM DEROULER-ECHEANCIER
            PERFORM CALCULER-TAEG
+           PERFORM VERIFIER-TAUX-USURE
            PERFORM ECRIRE-RECAPITULATIF
 
            MOVE "O" TO WS-EMETTRE
@@ -361,6 +382,23 @@
                    + WS-VERSEMENT(WS-J) * WS-ESCOMPTE
            END-PERFORM.
 
+      *> Le plafond vient de l'appelant. Un plafond nul veut dire qu'aucune
+      *> verification n'est demandee : le TAEG est rendu sans jugement.
+       VERIFIER-TAUX-USURE.
+           IF WS-E-TAUX-USURE = 0
+               MOVE CONFORME-SANS-OBJET TO WS-CONFORME
+               MOVE 0 TO WS-MARGE
+               EXIT PARAGRAPH
+           END-IF
+
+      *> Un TAEG egal au plafond reste licite : le depassement est strict.
+           COMPUTE WS-MARGE = WS-E-TAUX-USURE - WS-TAEG
+           IF WS-TAEG > WS-E-TAUX-USURE
+               MOVE CONFORME-NON TO WS-CONFORME
+           ELSE
+               MOVE CONFORME-OUI TO WS-CONFORME
+           END-IF.
+
        ECRIRE-RECAPITULATIF.
            MOVE WS-E-DUREE       TO WS-R-ECHEANCES
            MOVE WS-PREMIERE      TO WS-R-PREMIERE
@@ -371,6 +409,9 @@
            MOVE WS-CUM-DU        TO WS-R-TOTAL-DU
            MOVE WS-COUT-CREDIT   TO WS-R-COUT
            MOVE WS-TAEG          TO WS-R-TAEG
+           MOVE WS-E-TAUX-USURE  TO WS-R-TAUX-USURE
+           MOVE WS-CONFORME      TO WS-R-CONFORME
+           MOVE WS-MARGE         TO WS-R-MARGE
 
            DISPLAY WS-RECAP.
 
