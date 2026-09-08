@@ -30,13 +30,10 @@ jobs:
           mkdir -p bin
           cobc -x -free cobol/loan-amortization.cbl -o bin/loan_amortization
 
-      # Le meme test de fumee que dans l'image : la mensualite de reference et
-      # le nombre de lignes sont un contrat.
+      # Le meme script que dans l'image : le cas de reference ne vit qu'a un
+      # seul endroit.
       - name: Test de fumee du binaire COBOL
-        run: |
-          echo "0000025000000034500000240000000000000000000000000000000AN" | ./bin/loan_amortization > fumee.txt
-          grep -q '^R02400000000144348' fumee.txt
-          test "$(wc -l < fumee.txt)" -eq 241
+        run: sh scripts/fumee-cobol.sh ./bin/loan_amortization
 
       - name: gofmt
         run: |

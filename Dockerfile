@@ -12,14 +12,14 @@ RUN apt-get update && \
 
 WORKDIR /src
 COPY cobol/ ./cobol/
+COPY scripts/ ./scripts/
 
-# Compilation suivie d'un test de fumee sur un cas de reference : le build
-# echoue si la mensualite ou le nombre de lignes changent.
+# Compilation suivie du test de fumee : le build echoue si la mensualite de
+# reference ou le nombre de lignes changent. Le script est partage avec la CI,
+# pour que le cas de reference ne vive qu'a un seul endroit.
 RUN mkdir -p /out && \
     cobc -x -free cobol/loan-amortization.cbl -o /out/loan_amortization && \
-    echo "0000025000000034500000240A" | /out/loan_amortization > /tmp/fumee.txt && \
-    grep -q '^R02400000000144348' /tmp/fumee.txt && \
-    test "$(wc -l < /tmp/fumee.txt)" -eq 241
+    sh scripts/fumee-cobol.sh /out/loan_amortization
 
 # --- Compilation du service Go ----------------------------------------------
 FROM golang:1.26-bookworm AS go-builder
