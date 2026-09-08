@@ -154,22 +154,31 @@ jobs:
             "$base&frais_dossier=999999999999.999")
           test "$code" = "400"
 
-      # Loi n° 99-64 : seuil = TEM majore d'un cinquieme, depassement strict.
+      # Loi n° 99-64 : est excessif tout pret dont le TEG excede de plus du
+      # cinquieme le taux effectif moyen de la categorie. Le cas montre
+      # l'interet de la regle : un credit licite nu devient excessif une fois
+      # l'assurance integree aux flux.
       - name: Verifier le verdict de taux excessif
         run: |
-          base='http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240'
+          logement='http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240'
+          # Credit a la consommation, TEM publie 11,23 donc seuil 13,48.
+          conso='http://localhost:3000/v1/loans/schedule?capital=60000.000&taux=13&mois=60&tem=11.23'
 
-          sans=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base")
+          sans=$(curl -sf -H 'X-API-Key: cle-de-ci' "$logement")
           echo "$sans" | grep -q '"conforme":null'
+          echo "$sans" | grep -q '"seuil_excessif":null'
 
-          licite=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base&tem=11.23")
+          licite=$(curl -sf -H 'X-API-Key: cle-de-ci' "$conso")
+          echo "$licite" | grep -q '"teg":13.00'
+          echo "$licite" | grep -q '"seuil_excessif":13.48'
           echo "$licite" | grep -q '"conforme":true'
-          echo "$licite" | grep -q '"marge":2.25'
+          echo "$licite" | grep -q '"marge":0.48'
 
-          usuraire=$(curl -sf -H 'X-API-Key: cle-de-ci' \
-            "$base&tem=11.23&taux_assurance=0.36&assiette_assurance=capital_initial")
-          echo "$usuraire" | grep -q '"conforme":false'
-          echo "$usuraire" | grep -q '"seuil_excessif":13.48'
+          excessif=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            "$conso&taux_assurance=1.5&assiette_assurance=capital_initial")
+          echo "$excessif" | grep -q '"teg":15.41'
+          echo "$excessif" | grep -q '"conforme":false'
+          echo "$excessif" | grep -q '"marge":-1.93'
 
       - name: Verifier la specification OpenAPI
         run: |
