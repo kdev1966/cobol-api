@@ -5,32 +5,42 @@ FROM ubuntu:22.04
 # Éviter les interactions pendant l'installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Mettre à jour les paquets et installer les dépendances
+# GnuCOBOL traduit en C : un compilateur C est nécessaire à la construction.
+# Node.js vient de NodeSource car le paquet « nodejs » d'Ubuntu 22.04 est
+# Node 12, en fin de vie et trop ancien pour crypto.randomInt().
 RUN apt-get update && \
-    apt-get install -y \
+    apt-get install -y --no-install-recommends \
     build-essential \
-    gnucobol \
-    nodejs \
-    npm \
+    ca-certificates \
     curl \
+    gnucobol \
+    gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Définir le répertoire de travail
 WORKDIR /app
 
-# Copier tous les fichiers
-COPY . .
+# Compilation du programme COBOL, une seule fois : le runtime n'a plus besoin
+# de compiler au démarrage ni d'un accès en écriture aux sources.
+COPY cobol/ ./cobol/
+RUN mkdir -p /app/bin && \
+    cobc -x -free cobol/promo-code-generator.cbl -o /app/bin/promo_generator && \
+    echo "123456789" | /app/bin/promo_generator 1 | grep -q " - "
 
-# Script de débogage et compilation
-COPY debug_cobol.sh /app/debug_cobol.sh
-RUN chmod +x /app/debug_cobol.sh
+# Dépendances Node avant les sources : la couche reste en cache tant que les
+# manifestes ne bougent pas. npm ci installe exactement le lockfile.
+COPY nodejs/package.json nodejs/package-lock.json ./nodejs/
+RUN cd nodejs && npm ci --omit=dev
 
-# Exécuter le script de débogage
-RUN /app/debug_cobol.sh
+# Copier le code applicatif
+COPY nodejs/ ./nodejs/
 
-# Copier package.json et installer les dépendances Node.js
-COPY nodejs/package*.json ./nodejs/
-RUN cd nodejs && npm install
+ENV COBOL_PROGRAM_PATH=/app/bin/promo_generator \
+    DB_PATH=/app/database/promocodes.db \
+    NODE_ENV=production \
+    PORT=3000
 
 # Créer un volume pour la base de données
 VOLUME /app/database

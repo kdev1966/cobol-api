@@ -12,3 +12,11 @@ npm-debug.log*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Binaires COBOL compilés
+bin/
+cobol/promo_generator
+
+# Base de données locale
+database/
+*.db

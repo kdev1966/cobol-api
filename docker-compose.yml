@@ -6,8 +6,9 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./cobol:/app/cobol # Fichiers COBOL
-      - ./database:/app/database # Persistance base de données
+      # Le programme COBOL est désormais compilé dans l'image : seule la base
+      # de données a besoin de survivre au conteneur.
+      - ./database:/app/database
     environment:
       - NODE_ENV=production
     restart: unless-stopped
