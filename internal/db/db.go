@@ -10,6 +10,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -19,6 +20,11 @@ var migrations embed.FS
 // Pool est le type de connexion rendu par Ouvrir. L'alias evite aux appelants
 // d'importer pgxpool pour une simple signature.
 type Pool = pgxpool.Pool
+
+// estAbsent distingue l'absence de ligne des autres erreurs de requete.
+func estAbsent(err error) bool {
+	return errors.Is(err, pgx.ErrNoRows)
+}
 
 // verrouMigrations identifie le verrou consultatif pris pendant l'application
 // des migrations. Plusieurs instances peuvent demarrer en meme temps ; sans

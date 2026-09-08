@@ -221,12 +221,32 @@
             "name": "tem",
             "in": "query",
             "required": false,
-            "description": "Taux effectif moyen publie par la Banque Centrale de Tunisie pour la categorie de concours, en pourcent. Fourni, la reponse porte un verdict de taux excessif : le seuil est le TEM majore d'un cinquieme, et le depassement est strict. Omis, le TEG est rendu sans jugement.",
+            "description": "Taux effectif moyen publie par la Banque Centrale de Tunisie pour la categorie de concours, en pourcent. Fourni, la reponse porte un verdict de taux excessif : le seuil est le TEM majore d'un cinquieme, et le depassement est strict. Omis, le TEG est rendu sans jugement. S'exclut avec categorie.",
             "schema": {
               "type": "string",
               "pattern": "^\\d{1,2}(\\.\\d{1,2})?$"
             },
             "example": "10.25"
+          },
+          {
+            "name": "categorie",
+            "in": "query",
+            "required": false,
+            "description": "Categorie de concours. Le taux effectif moyen est alors lu dans le bareme en vigueur et la reponse cite l'arrete applique. S'exclut avec tem : la categorie determine le taux.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "leasing",
+                "decouverts",
+                "gestion_des_dettes",
+                "credits_consommation",
+                "credits_logement",
+                "credits_moyen_terme",
+                "credits_long_terme",
+                "credits_court_terme"
+              ]
+            },
+            "example": "credits_consommation"
           }
         ],
         "responses": {
@@ -287,6 +307,69 @@
           },
           "504": {
             "description": "Le calcul a depasse son delai",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/baremes": {
+      "get": {
+        "tags": [
+          "credit"
+        ],
+        "summary": "Bareme en vigueur",
+        "description": "Taux effectifs moyens en vigueur, une ligne par categorie de concours. Le seuil du taux excessif n'y figure pas : il se deduit du taux effectif moyen par la regle du cinquieme, portee par le moteur de calcul.",
+        "operationId": "bareme",
+        "responses": {
+          "200": {
+            "description": "Bareme en vigueur",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "count",
+                    "baremes"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "count": {
+                      "type": "integer",
+                      "example": 8
+                    },
+                    "baremes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Bareme"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Cle d'API absente ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Bareme indisponible",
             "content": {
               "application/json": {
                 "schema": {
@@ -578,6 +661,50 @@
             "items": {
               "$ref": "#/components/schemas/Echeance"
             }
+          },
+          "bareme": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Bareme"
+              }
+            ],
+            "description": "Present seulement quand une categorie a ete fournie."
+          }
+        }
+      },
+      "Bareme": {
+        "type": "object",
+        "description": "Taux effectif moyen applique, tel que publie par arrete.",
+        "required": [
+          "categorie",
+          "semestre",
+          "tem",
+          "arrete",
+          "publie_le"
+        ],
+        "properties": {
+          "categorie": {
+            "type": "string",
+            "example": "credits_consommation"
+          },
+          "semestre": {
+            "type": "string",
+            "description": "Semestre d'application, forme 2026S1.",
+            "example": "2026S1"
+          },
+          "tem": {
+            "type": "string",
+            "description": "Rendu en chaine : la valeur ne passe jamais par un flottant.",
+            "example": "11.23"
+          },
+          "arrete": {
+            "type": "string",
+            "example": "Arrete du 28 juillet 2026"
+          },
+          "publie_le": {
+            "type": "string",
+            "format": "date",
+            "example": "2026-07-28"
           }
         }
       }

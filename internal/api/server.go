@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kdev1966/cobol-api/internal/db"
@@ -57,7 +58,10 @@ type Serveur struct {
 	// base peut etre nil : /health ne sonde alors pas la base. En service
 	// elle est toujours fournie.
 	base *db.Pool
-	mux  *http.ServeMux
+	// baremes est nil quand aucune base n'est fournie : le parametre
+	// categorie est alors refuse et le TEM doit etre passe directement.
+	baremes *db.Baremes
+	mux     *http.ServeMux
 }
 
 // NewServeur verifie la coherence de la configuration puis monte les routes.
@@ -81,6 +85,9 @@ func NewServeur(cfg Config, base *db.Pool) (*Serveur, error) {
 		base:   base,
 		mux:    http.NewServeMux(),
 	}
+	if base != nil {
+		s.baremes = db.NewBaremes(base)
+	}
 	s.monterRoutes()
 	return s, nil
 }
@@ -101,6 +108,7 @@ func (s *Serveur) monterRoutes() {
 	// Les routes metier sont versionnees : le format du recapitulatif a
 	// deja change une fois, et un client tiers ne doit pas en patir.
 	s.mux.Handle("GET /v1/loans/schedule", protege(s.echeancier))
+	s.mux.Handle("GET /v1/baremes", protege(s.bareme))
 	s.mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ecrireErreur(w, http.StatusNotFound, "Ressource inconnue")
 	}))
@@ -125,12 +133,18 @@ func (s *Serveur) index(w http.ResponseWriter, r *http.Request) {
 		"endpoints": []map[string]any{
 			{
 				"method":              "GET",
-				"path":                "/v1/loans/schedule?capital=&taux=&mois=&methode=&frais_dossier=&frais_garantie=&taux_assurance=&assiette_assurance=&tem=",
+				"path":                "/v1/loans/schedule?capital=&taux=&mois=&methode=&frais_dossier=&frais_garantie=&taux_assurance=&assiette_assurance=&categorie=",
 				"auth":                true,
 				"description":         "Echeancier de pret",
 				"methodes":            loan.MethodesAcceptees(),
 				"methode_par_defaut":  loan.MethodeParDefaut,
 				"assiettes_assurance": loan.AssiettesAcceptees(),
+			},
+			{
+				"method":      "GET",
+				"path":        "/v1/baremes",
+				"auth":        true,
+				"description": "Taux effectifs moyens en vigueur, par categorie de concours",
 			},
 			{
 				"method":      "GET",
@@ -184,8 +198,78 @@ func (s *Serveur) sante(w http.ResponseWriter, r *http.Request) {
 	ecrireJSON(w, code, corps)
 }
 
+// bareme rend les taux effectifs moyens en vigueur, une ligne par categorie.
+func (s *Serveur) bareme(w http.ResponseWriter, r *http.Request) {
+	if s.baremes == nil {
+		ecrireErreur(w, http.StatusServiceUnavailable, "Bareme indisponible")
+		return
+	}
+	tous, err := s.baremes.Lister(r.Context())
+	if err != nil {
+		slog.Error("lecture du bareme", "id", IDRequete(r.Context()), "erreur", err)
+		ecrireErreur(w, http.StatusInternalServerError, "Erreur interne")
+		return
+	}
+	ecrireJSON(w, http.StatusOK, map[string]any{
+		"status":  "success",
+		"count":   len(tous),
+		"baremes": tous,
+	})
+}
+
+// resoudreTem traduit une categorie de concours en taux effectif moyen. Rendre
+// le bareme applique, et non seulement le taux, permet a l'appelant de citer
+// l'arrete sur lequel repose le verdict.
+func (s *Serveur) resoudreTem(r *http.Request, categorie string) (*db.TauxEffectif, error) {
+	if s.baremes == nil {
+		return nil, &loan.ErreurValidation{Champ: "categorie",
+			Message: "le bareme n'est pas disponible ; fournir tem directement"}
+	}
+	t, err := s.baremes.TauxEffectifMoyen(r.Context(), categorie)
+	if err != nil {
+		if errors.Is(err, db.ErrCategorieInconnue) {
+			connues, _ := s.baremes.Categories(r.Context())
+			return nil, &loan.ErreurValidation{Champ: "categorie",
+				Message: "inconnue ; categories du bareme : " + strings.Join(connues, ", ")}
+		}
+		return nil, err
+	}
+	return &t, nil
+}
+
 func (s *Serveur) echeancier(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+
+	// La categorie et le taux effectif moyen designent la meme chose : l'un se
+	// lit dans le bareme, l'autre est impose. Les accepter ensemble ouvrirait
+	// la porte a un verdict rendu sur un taux qui n'est pas celui annonce.
+	categorie, tem := strings.TrimSpace(q.Get("categorie")), q.Get("tem")
+	var bareme *db.TauxEffectif
+	if categorie != "" {
+		if strings.TrimSpace(tem) != "" {
+			ecrireJSON(w, http.StatusBadRequest, map[string]any{
+				"status": "error", "champ": "categorie",
+				"message": "categorie et tem s'excluent : la categorie determine le taux",
+			})
+			return
+		}
+		var err error
+		bareme, err = s.resoudreTem(r, categorie)
+		if err != nil {
+			var invalide *loan.ErreurValidation
+			if errors.As(err, &invalide) {
+				ecrireJSON(w, http.StatusBadRequest, map[string]any{
+					"status": "error", "champ": invalide.Champ, "message": invalide.Message,
+				})
+				return
+			}
+			slog.Error("resolution du bareme", "id", IDRequete(r.Context()), "erreur", err)
+			ecrireErreur(w, http.StatusInternalServerError, "Erreur interne")
+			return
+		}
+		tem = bareme.Tem
+	}
+
 	demande, err := loan.ParseDemande(loan.Parametres{
 		Capital:       q.Get("capital"),
 		Taux:          q.Get("taux"),
@@ -195,7 +279,7 @@ func (s *Serveur) echeancier(w http.ResponseWriter, r *http.Request) {
 		FraisGarantie: q.Get("frais_garantie"),
 		TauxAssurance: q.Get("taux_assurance"),
 		Assiette:      q.Get("assiette_assurance"),
-		Tem:           q.Get("tem"),
+		Tem:           tem,
 	})
 	if err != nil {
 		var invalide *loan.ErreurValidation
@@ -225,12 +309,18 @@ func (s *Serveur) echeancier(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ecrireJSON(w, http.StatusOK, map[string]any{
+	corps := map[string]any{
 		"status":        "success",
 		"demande":       demande,
 		"recapitulatif": resultat.Recapitulatif,
 		"echeancier":    resultat.Echeancier,
-	})
+	}
+	// Citer l'arrete applique : le verdict de taux excessif ne vaut que
+	// rapporte au bareme sur lequel il repose.
+	if bareme != nil {
+		corps["bareme"] = bareme
+	}
+	ecrireJSON(w, http.StatusOK, corps)
 }
 
 func ecrireJSON(w http.ResponseWriter, code int, corps any) {

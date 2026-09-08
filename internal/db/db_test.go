@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"testing"
@@ -160,5 +161,108 @@ func TestListerMigrationsRendUnOrdreStable(t *testing.T) {
 		if noms[i-1] >= noms[i] {
 			t.Errorf("ordre non croissant : %s puis %s", noms[i-1], noms[i])
 		}
+	}
+}
+
+func baremes(t *testing.T) *Baremes {
+	t.Helper()
+	pool := ouvrir(t)
+	if err := Migrer(context.Background(), pool); err != nil {
+		t.Fatalf("Migrer : %v", err)
+	}
+	return NewBaremes(pool)
+}
+
+func TestTauxEffectifMoyen(t *testing.T) {
+	b := baremes(t)
+
+	tem, err := b.TauxEffectifMoyen(context.Background(), "credits_logement")
+	if err != nil {
+		t.Fatalf("TauxEffectifMoyen : %v", err)
+	}
+	// Le taux traverse le service sous forme de texte : jamais de flottant.
+	if tem.Tem != "10.25" {
+		t.Errorf("tem %q, attendu \"10.25\"", tem.Tem)
+	}
+	if tem.Semestre != "2026S1" {
+		t.Errorf("semestre %q", tem.Semestre)
+	}
+	if tem.Arrete == "" || tem.PublieLe != "2026-07-28" {
+		t.Errorf("tracabilite incomplete : %+v", tem)
+	}
+}
+
+func TestTauxEffectifMoyenSignaleUneCategorieInconnue(t *testing.T) {
+	b := baremes(t)
+
+	_, err := b.TauxEffectifMoyen(context.Background(), "credits_lunaires")
+	if !errors.Is(err, ErrCategorieInconnue) {
+		t.Fatalf("erreur %v, attendu ErrCategorieInconnue", err)
+	}
+}
+
+// Un nouvel arrete doit prendre le pas sur le precedent, sans effacer
+// l'historique : le format 2026S1 rend l'ordre lexicographique chronologique.
+func TestLeSemestreLePlusRecentLEmporte(t *testing.T) {
+	b := baremes(t)
+	ctx := context.Background()
+
+	_, err := b.pool.Exec(ctx, `
+		INSERT INTO taux_effectifs_moyens (categorie, semestre, tem, arrete, publie_le)
+		VALUES ('credits_logement', '2026S2', 11.10, 'Arrete de test', '2027-01-15')
+		ON CONFLICT (categorie, semestre) DO NOTHING`)
+	if err != nil {
+		t.Fatalf("insertion : %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = b.pool.Exec(context.Background(),
+			"DELETE FROM taux_effectifs_moyens WHERE semestre = '2026S2'")
+	})
+
+	tem, err := b.TauxEffectifMoyen(ctx, "credits_logement")
+	if err != nil {
+		t.Fatalf("TauxEffectifMoyen : %v", err)
+	}
+	if tem.Semestre != "2026S2" || tem.Tem != "11.10" {
+		t.Errorf("semestre %s tem %s, attendu 2026S2 / 11.10", tem.Semestre, tem.Tem)
+	}
+
+	// L'ancien reste en base : le bareme est un historique, pas un etat.
+	var n int
+	if err := b.pool.QueryRow(ctx,
+		"SELECT count(*) FROM taux_effectifs_moyens WHERE categorie = 'credits_logement'").
+		Scan(&n); err != nil {
+		t.Fatalf("comptage : %v", err)
+	}
+	if n != 2 {
+		t.Errorf("%d semestres conserves pour credits_logement, attendu 2", n)
+	}
+}
+
+func TestListerRendUneLigneParCategorie(t *testing.T) {
+	b := baremes(t)
+	ctx := context.Background()
+
+	tous, err := b.Lister(ctx)
+	if err != nil {
+		t.Fatalf("Lister : %v", err)
+	}
+	if len(tous) != 8 {
+		t.Fatalf("%d categories, attendu 8", len(tous))
+	}
+	vues := make(map[string]bool)
+	for _, t2 := range tous {
+		if vues[t2.Categorie] {
+			t.Errorf("categorie %s rendue deux fois", t2.Categorie)
+		}
+		vues[t2.Categorie] = true
+	}
+
+	noms, err := b.Categories(ctx)
+	if err != nil {
+		t.Fatalf("Categories : %v", err)
+	}
+	if len(noms) != len(tous) {
+		t.Errorf("%d noms pour %d categories", len(noms), len(tous))
 	}
 }

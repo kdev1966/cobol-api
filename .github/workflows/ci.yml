@@ -214,11 +214,33 @@ jobs:
           echo "$excessif" | grep -q '"conforme":false'
           echo "$excessif" | grep -q '"marge":-1.93'
 
+      # Le bareme resout le taux effectif moyen et le verdict cite l'arrete.
+      - name: Verifier le bareme
+        run: |
+          liste=$(curl -sf -H 'X-API-Key: cle-de-ci' http://localhost:3000/v1/baremes)
+          echo "$liste" | grep -q '"count":8'
+          echo "$liste" | grep -q '"categorie":"credits_consommation","semestre":"2026S1","tem":"11.23"'
+
+          par_categorie=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/schedule?capital=60000.000&taux=13&mois=60&categorie=credits_consommation')
+          echo "$par_categorie" | grep -q '"arrete":"Arrete du 28 juillet 2026"'
+          echo "$par_categorie" | grep -q '"tem":11.23'
+          echo "$par_categorie" | grep -q '"seuil_excessif":13.48'
+          echo "$par_categorie" | grep -q '"conforme":true'
+
+          # Categorie inconnue et redondance avec tem : refusees en 400.
+          for q in 'categorie=credits_lunaires' 'categorie=credits_logement&tem=10.25'; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+              "http://localhost:3000/v1/loans/schedule?capital=60000.000&taux=13&mois=60&$q")
+            test "$code" = "400"
+          done
+
       - name: Verifier la specification OpenAPI
         run: |
           spec=$(curl -sf http://localhost:3000/openapi.json)
           echo "$spec" | grep -q '"openapi"'
           echo "$spec" | grep -q '/v1/loans/schedule'
+          echo "$spec" | grep -q '/v1/baremes'
           # Le chemin non versionne ne doit plus repondre.
           code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
             'http://localhost:3000/loans/schedule?capital=1000&taux=3&mois=12')

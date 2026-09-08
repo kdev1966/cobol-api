@@ -460,3 +460,177 @@ func TestSanteSignaleUneBaseInjoignable(t *testing.T) {
 		t.Errorf("HTTP %d, attendu 503 : %s", w.Code, w.Body.String())
 	}
 }
+
+// serveurAvecBase monte un serveur relie a PostgreSQL, ou saute le test.
+func serveurAvecBase(t *testing.T) http.Handler {
+	t.Helper()
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		t.Skip("DATABASE_URL absente")
+	}
+	pool, err := db.Ouvrir(context.Background(), url)
+	if err != nil {
+		t.Fatalf("Ouvrir : %v", err)
+	}
+	t.Cleanup(pool.Close)
+	if err := db.Migrer(context.Background(), pool); err != nil {
+		t.Fatalf("Migrer : %v", err)
+	}
+
+	s, err := NewServeur(Config{
+		CheminProgramme:   binaire(t),
+		CleAPI:            "cle-de-test",
+		RequetesParMinute: 1000,
+	}, pool)
+	if err != nil {
+		t.Fatalf("NewServeur : %v", err)
+	}
+	return s.Handler()
+}
+
+func TestBaremeListe(t *testing.T) {
+	h := serveurAvecBase(t)
+
+	w := appeler(h, "GET", "/v1/baremes", "cle-de-test")
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d : %s", w.Code, w.Body.String())
+	}
+	var corps struct {
+		Count   int `json:"count"`
+		Baremes []struct {
+			Categorie string `json:"categorie"`
+			Tem       string `json:"tem"`
+			Arrete    string `json:"arrete"`
+		} `json:"baremes"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &corps); err != nil {
+		t.Fatalf("reponse illisible : %v", err)
+	}
+	if corps.Count != 8 || len(corps.Baremes) != 8 {
+		t.Fatalf("count=%d, %d lignes, attendu 8", corps.Count, len(corps.Baremes))
+	}
+	for _, b := range corps.Baremes {
+		if b.Arrete == "" {
+			t.Errorf("%s : arrete absent", b.Categorie)
+		}
+	}
+
+	if got := appeler(h, "GET", "/v1/baremes", "").Code; got != http.StatusUnauthorized {
+		t.Errorf("sans cle : HTTP %d, attendu 401", got)
+	}
+}
+
+// La categorie doit resoudre le taux dans le bareme et le verdict citer
+// l'arrete applique.
+func TestCategorieResoutLeTauxEtCiteLArrete(t *testing.T) {
+	h := serveurAvecBase(t)
+
+	w := appeler(h, "GET",
+		"/v1/loans/schedule?capital=60000.000&taux=13&mois=60&categorie=credits_consommation",
+		"cle-de-test")
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d : %s", w.Code, w.Body.String())
+	}
+
+	var corps struct {
+		Bareme *struct {
+			Categorie string `json:"categorie"`
+			Semestre  string `json:"semestre"`
+			Tem       string `json:"tem"`
+			Arrete    string `json:"arrete"`
+		} `json:"bareme"`
+		Recapitulatif struct {
+			Teg      json.Number `json:"teg"`
+			Tem      json.Number `json:"tem"`
+			Seuil    json.Number `json:"seuil_excessif"`
+			Conforme *bool       `json:"conforme"`
+		} `json:"recapitulatif"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &corps); err != nil {
+		t.Fatalf("reponse illisible : %v", err)
+	}
+
+	if corps.Bareme == nil {
+		t.Fatal("le bareme applique devrait etre cite")
+	}
+	if corps.Bareme.Categorie != "credits_consommation" || corps.Bareme.Tem != "11.23" {
+		t.Errorf("bareme %+v", corps.Bareme)
+	}
+	if corps.Bareme.Arrete == "" || corps.Bareme.Semestre == "" {
+		t.Error("l'arrete et le semestre doivent etre cites")
+	}
+	// Le TEM du bareme doit etre celui applique par le moteur.
+	if corps.Recapitulatif.Tem.String() != "11.23" {
+		t.Errorf("tem applique %s, bareme 11.23", corps.Recapitulatif.Tem)
+	}
+	// Seuil = TEM majore d'un cinquieme.
+	if corps.Recapitulatif.Seuil.String() != "13.48" {
+		t.Errorf("seuil %s, attendu 13.48", corps.Recapitulatif.Seuil)
+	}
+	if corps.Recapitulatif.Conforme == nil || !*corps.Recapitulatif.Conforme {
+		t.Errorf("un TEG de %s devrait passer sous 13.48", corps.Recapitulatif.Teg)
+	}
+}
+
+// Sans categorie ni TEM, aucun verdict, et aucun bareme cite.
+func TestSansCategorieAucunBaremeCite(t *testing.T) {
+	h := serveurAvecBase(t)
+
+	w := appeler(h, "GET",
+		"/v1/loans/schedule?capital=60000.000&taux=13&mois=60", "cle-de-test")
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d", w.Code)
+	}
+	var corps map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &corps); err != nil {
+		t.Fatalf("reponse illisible : %v", err)
+	}
+	if _, present := corps["bareme"]; present {
+		t.Error("aucun bareme ne devrait etre cite sans categorie")
+	}
+}
+
+func TestCategorieRefuseeQuandInconnueOuRedondante(t *testing.T) {
+	h := serveurAvecBase(t)
+	base := "/v1/loans/schedule?capital=60000.000&taux=13&mois=60"
+
+	cas := []struct{ nom, requete string }{
+		{"categorie inconnue", base + "&categorie=credits_lunaires"},
+		// La categorie determine le taux : accepter les deux ouvrirait la
+		// porte a un verdict rendu sur un taux different de celui annonce.
+		{"categorie et tem ensemble", base + "&categorie=credits_consommation&tem=9.99"},
+	}
+	for _, c := range cas {
+		w := appeler(h, "GET", c.requete, "cle-de-test")
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s : HTTP %d, attendu 400", c.nom, w.Code)
+			continue
+		}
+		var corps struct {
+			Champ string `json:"champ"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &corps); err != nil {
+			t.Errorf("%s : reponse illisible", c.nom)
+			continue
+		}
+		if corps.Champ != "categorie" {
+			t.Errorf("%s : champ %q, attendu \"categorie\"", c.nom, corps.Champ)
+		}
+	}
+}
+
+// Sans base, le parametre categorie doit etre refuse clairement plutot que
+// silencieusement ignore.
+func TestCategorieRefuseeSansBase(t *testing.T) {
+	h := serveurDeTest(t, nil)
+
+	w := appeler(h, "GET",
+		"/v1/loans/schedule?capital=60000.000&taux=13&mois=60&categorie=credits_consommation",
+		"cle-de-test")
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("HTTP %d, attendu 400 : %s", w.Code, w.Body.String())
+	}
+	if got := appeler(h, "GET", "/v1/baremes", "cle-de-test").Code; got != http.StatusServiceUnavailable {
+		t.Errorf("/v1/baremes sans base : HTTP %d, attendu 503", got)
+	}
+}

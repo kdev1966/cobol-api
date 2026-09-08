@@ -109,7 +109,27 @@ Chaque ligne de l'échéancier distingue `echeance` (capital + intérêts) de
 La [loi n° 99-64 du 15 juillet 1999](https://www.jurisitetunisie.com/tunisie/codes/teg/tie1000.htm)
 définit comme excessif tout prêt dont le TEG **excède de plus du cinquième** le
 taux effectif moyen pratiqué au semestre précédent pour la même catégorie de
-concours. Passer le paramètre `tem` fait rendre un verdict :
+concours. Deux façons d'obtenir le verdict. La plus sûre est de nommer la **catégorie de
+concours** : le taux effectif moyen est alors lu dans le barème, et la réponse
+**cite l'arrêté** sur lequel elle repose.
+
+```sh
+curl -s -H "X-API-Key: $K" \
+  '.../v1/loans/schedule?capital=60000.000&taux=13&mois=60&categorie=credits_consommation' | jq .bareme
+```
+```json
+{
+  "categorie": "credits_consommation", "semestre": "2026S1", "tem": "11.23",
+  "arrete": "Arrete du 28 juillet 2026", "publie_le": "2026-07-28"
+}
+```
+
+Un verdict de taux excessif ne vaut que rapporté au barème qui le fonde ; la
+réponse le porte donc avec elle.
+
+L'alternative est de passer directement `tem`. Les deux paramètres **s'excluent** :
+les accepter ensemble ouvrirait la porte à un verdict rendu sur un taux
+différent de celui annoncé. Dans les deux cas :
 
 ```json
 "tem": 10.25, "seuil_excessif": 12.30, "conforme": true, "marge": 3.80
@@ -121,9 +141,10 @@ Un TEG **égal** au seuil reste licite : le dépassement est strict.
 
 Les taux effectifs moyens sont publiés par arrêté du ministre des finances, sur
 proposition de la Banque Centrale de Tunisie, au dernier mois de chaque
-semestre. Le service ne les connaît pas : ils lui sont fournis. Une suite de
-tests vérifie que le calcul du seuil redonne bien les huit valeurs publiées par
-l'arrêté du 28 juillet 2026 :
+semestre. Le service les conserve en base, par catégorie et par semestre, et
+`GET /v1/baremes` rend ceux en vigueur. Une suite de tests vérifie que le
+calcul du seuil redonne bien les huit valeurs publiées par l'arrêté du
+28 juillet 2026 :
 
 | Catégorie | TEM | Seuil |
 |---|---|---|
@@ -136,8 +157,8 @@ l'arrêté du 28 juillet 2026 :
 | Crédits à long terme | 9,63 % | 11,56 % |
 | Crédits à court terme | 9,57 % | 11,48 % |
 
-Sans le paramètre `tem`, les quatre champs sont `null` : le service rend le TEG
-sans le juger.
+Sans `categorie` ni `tem`, les quatre champs sont `null` et aucun barème n'est
+cité : le service rend le TEG sans le juger.
 
 ## Le TEG
 
@@ -189,6 +210,7 @@ jusqu'à la réponse.
 | `GET` | `/` | non | Index du service |
 | `GET` | `/openapi.json` | non | Spécification OpenAPI 3.1 |
 | `GET` | `/v1/loans/schedule?capital=&taux=&mois=&methode=…` | oui | Échéancier de prêt |
+| `GET` | `/v1/baremes` | oui | Taux effectifs moyens en vigueur, par catégorie |
 | `GET` | `/health` | non | État du service ; `503` si le binaire COBOL manque |
 
 Les routes métier sont versionnées. Le format du récapitulatif a déjà changé
@@ -318,6 +340,10 @@ règle du cinquième, et cette règle appartient au programme COBOL. On ne
 conserve que la donnée publiée, avec la référence de l'arrêté pour la
 traçabilité réglementaire.
 
+Un nouvel arrêté s'ajoute sans effacer le précédent : la table est un
+historique, et la recherche retient le semestre le plus récent. Le format
+`2026S1` rend l'ordre lexicographique et l'ordre chronologique identiques.
+
 Les migrations sont embarquées dans le binaire et appliquées au démarrage, sous
 un verrou consultatif PostgreSQL : plusieurs instances peuvent démarrer en même
 temps sans appliquer deux fois la même migration. Un test le vérifie sur six
@@ -359,6 +385,5 @@ privilégié et n'écrit rien sur disque.
 - Le taux périodique est **proportionnel** (taux nominal annuel divisé par
   douze), et non le taux actuariel équivalent. C'est un choix, pas un oubli.
 - Pas d'échéances irrégulières, de différé d'amortissement ni de remboursement anticipé.
-- Le taux effectif moyen doit encore être fourni par l'appelant. La table des
-  barèmes existe et est peuplée, mais le paramètre `categorie` qui l'exploitera
-  n'est pas encore branché.
+- Le barème doit être alimenté à chaque nouvel arrêté, par migration. Aucune
+  interface d'administration n'existe.
