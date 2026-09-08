@@ -32,12 +32,16 @@ func binaire(t *testing.T) string {
 // recap et echeance fabriquent les enregistrements a largeur fixe attendus,
 // aux memes positions que celles produites par le programme COBOL.
 func recap(echeances int, premiere, derniere, interets, total string) string {
-	return fmt.Sprintf("R%04d%013s%013s%015s%015s%06d",
-		echeances, premiere, derniere, interets, total, 35051)
+	// assurance, frais et cout sont a zero : les tests de lecture portent sur
+	// le decoupage, pas sur le calcul.
+	return fmt.Sprintf("R%04d%013s%013s%015s%015s%013s%015s%015s%06d",
+		echeances, premiere, derniere, interets,
+		"000000000000000", "0000000000000", total, interets, 35051)
 }
 
-func echeance(n int, paiement, interets, capital, solde string) string {
-	return fmt.Sprintf("E%04d%013s%013s%013s%013s", n, paiement, interets, capital, solde)
+func echeance(n int, mensualite, interets, capital, solde string) string {
+	return fmt.Sprintf("E%04d%013s%013s%013s%013s%013s%013s",
+		n, mensualite, interets, capital, "0000000000000", mensualite, solde)
 }
 
 func TestLireSortieEcarteLesLignesParasites(t *testing.T) {
@@ -59,11 +63,11 @@ func TestLireSortieEcarteLesLignesParasites(t *testing.T) {
 	if len(res.Echeancier) != 2 {
 		t.Fatalf("%d echeances, attendu 2", len(res.Echeancier))
 	}
-	if got := res.Recapitulatif.PremiereEcheance.String(); got != "100.00" {
-		t.Errorf("premiere echeance %q, attendu \"100.00\"", got)
+	if got := res.Recapitulatif.PremiereMensualite.String(); got != "100.00" {
+		t.Errorf("premiere mensualite %q, attendu \"100.00\"", got)
 	}
-	if got := res.Recapitulatif.DerniereEcheance.String(); got != "105.00" {
-		t.Errorf("derniere echeance %q, attendu \"105.00\"", got)
+	if got := res.Recapitulatif.DerniereMensualite.String(); got != "105.00" {
+		t.Errorf("derniere mensualite %q, attendu \"105.00\"", got)
 	}
 	if got := res.Echeancier[1].Solde.String(); got != "0.00" {
 		t.Errorf("solde final %q, attendu \"0.00\"", got)
@@ -110,10 +114,10 @@ func TestLesMontantsNeTransitentPasParUnFlottant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lireSortie : %v", err)
 	}
-	if got := res.Recapitulatif.PremiereEcheance.String(); got != "0.07" {
-		t.Errorf("premiere echeance %q, attendu \"0.07\"", got)
+	if got := res.Recapitulatif.PremiereMensualite.String(); got != "0.07" {
+		t.Errorf("premiere mensualite %q, attendu \"0.07\"", got)
 	}
-	if got := res.Echeancier[0].Paiement.String(); got != "8388608010.00" {
+	if got := res.Echeancier[0].Mensualite.String(); got != "8388608010.00" {
 		t.Errorf("paiement %q, attendu \"8388608010.00\"", got)
 	}
 }
@@ -183,16 +187,18 @@ func TestInvariantsDeLEcheancier(t *testing.T) {
 		for _, c := range cas {
 			nom := methode + "/" + c.capital + "@" + c.taux + "%x" + c.mois
 			t.Run(nom, func(t *testing.T) {
-				verifierInvariants(t, moteur, c.capital, c.taux, c.mois, methode)
+				verifierInvariants(t, moteur, Parametres{
+					Capital: c.capital, Taux: c.taux, Mois: c.mois, Methode: methode,
+				})
 			})
 		}
 	}
 }
 
-func verifierInvariants(t *testing.T, moteur *Moteur, capital, taux, mois, methode string) {
+func verifierInvariants(t *testing.T, moteur *Moteur, p Parametres) {
 	t.Helper()
 
-	d, err := ParseDemande(capital, taux, mois, methode)
+	d, err := ParseDemande(p)
 	if err != nil {
 		t.Fatalf("ParseDemande : %v", err)
 	}
@@ -203,18 +209,27 @@ func verifierInvariants(t *testing.T, moteur *Moteur, capital, taux, mois, metho
 	}
 
 	var sommeCapital, sommeInterets, sommeEcheances int64
+	var sommeAssurance, sommeMensualites int64
 	for _, e := range res.Echeancier {
-		p := centimes(t, e.Paiement)
+		p := centimes(t, e.Echeance)
 		i := centimes(t, e.Interets)
 		k := centimes(t, e.Capital)
 
-		// Invariant 4 : chaque ligne s'equilibre.
+		// Invariant 4 : la part de credit s'equilibre.
 		if p != i+k {
-			t.Errorf("echeance %d : paiement %d != interets %d + capital %d", e.N, p, i, k)
+			t.Errorf("echeance %d : echeance %d != interets %d + capital %d", e.N, p, i, k)
+		}
+		// Invariant 5 : la mensualite est l'echeance plus l'assurance.
+		a := centimes(t, e.Assurance)
+		if m := centimes(t, e.Mensualite); m != p+a {
+			t.Errorf("echeance %d : mensualite %d != echeance %d + assurance %d",
+				e.N, m, p, a)
 		}
 		sommeCapital += k
 		sommeInterets += i
 		sommeEcheances += p
+		sommeAssurance += a
+		sommeMensualites += centimes(t, e.Mensualite)
 	}
 
 	// Invariant 1 : la somme des parts de capital egale le capital emprunte.
@@ -239,16 +254,28 @@ func verifierInvariants(t *testing.T, moteur *Moteur, capital, taux, mois, metho
 	if got := centimes(t, res.Recapitulatif.TotalInterets); got != sommeInterets {
 		t.Errorf("total_interets %d, detail %d", got, sommeInterets)
 	}
-	if got := centimes(t, res.Recapitulatif.TotalDu); got != sommeEcheances {
-		t.Errorf("total_du %d, detail %d", got, sommeEcheances)
+	// Invariant 6 : le total verse est la somme des mensualites.
+	if got := centimes(t, res.Recapitulatif.TotalVerse); got != sommeMensualites {
+		t.Errorf("total_verse %d, detail %d", got, sommeMensualites)
 	}
-	if got, veut := centimes(t, res.Recapitulatif.PremiereEcheance),
-		centimes(t, res.Echeancier[0].Paiement); got != veut {
-		t.Errorf("premiere_echeance %d, detail %d", got, veut)
+	if got := centimes(t, res.Recapitulatif.TotalAssurance); got != sommeAssurance {
+		t.Errorf("total_assurance %d, detail %d", got, sommeAssurance)
 	}
-	if got, veut := centimes(t, res.Recapitulatif.DerniereEcheance),
-		centimes(t, res.Echeancier[len(res.Echeancier)-1].Paiement); got != veut {
-		t.Errorf("derniere_echeance %d, detail %d", got, veut)
+	// Le cout du credit agrege interets, assurance et frais.
+	frais := d.FraisDossierCentimes + d.FraisGarantieCentimes
+	if got := centimes(t, res.Recapitulatif.CoutCredit); got != sommeInterets+sommeAssurance+frais {
+		t.Errorf("cout_credit %d, attendu %d", got, sommeInterets+sommeAssurance+frais)
+	}
+	if got := centimes(t, res.Recapitulatif.TotalFrais); got != frais {
+		t.Errorf("total_frais %d, attendu %d", got, frais)
+	}
+	if got, veut := centimes(t, res.Recapitulatif.PremiereMensualite),
+		centimes(t, res.Echeancier[0].Mensualite); got != veut {
+		t.Errorf("premiere_mensualite %d, detail %d", got, veut)
+	}
+	if got, veut := centimes(t, res.Recapitulatif.DerniereMensualite),
+		centimes(t, res.Echeancier[len(res.Echeancier)-1].Mensualite); got != veut {
+		t.Errorf("derniere_mensualite %d, detail %d", got, veut)
 	}
 }
 
@@ -259,7 +286,7 @@ func TestSignatureDeChaqueMethode(t *testing.T) {
 
 	calculer := func(methode string) *Echeancier {
 		t.Helper()
-		d, err := ParseDemande("120000.00", "4.2", "60", methode)
+		d, err := ParseDemande(Parametres{Capital: "120000.00", Taux: "4.2", Mois: "60", Methode: methode})
 		if err != nil {
 			t.Fatalf("ParseDemande : %v", err)
 		}
@@ -272,10 +299,10 @@ func TestSignatureDeChaqueMethode(t *testing.T) {
 
 	// Annuite constante : toutes les echeances sauf la derniere sont egales.
 	annuite := calculer("annuite_constante")
-	ref := annuite.Echeancier[0].Paiement.String()
+	ref := annuite.Echeancier[0].Mensualite.String()
 	for _, e := range annuite.Echeancier[:len(annuite.Echeancier)-1] {
-		if e.Paiement.String() != ref {
-			t.Fatalf("annuite constante : echeance %d vaut %s, attendu %s", e.N, e.Paiement, ref)
+		if e.Mensualite.String() != ref {
+			t.Fatalf("annuite constante : echeance %d vaut %s, attendu %s", e.N, e.Mensualite, ref)
 		}
 	}
 
@@ -289,8 +316,8 @@ func TestSignatureDeChaqueMethode(t *testing.T) {
 				e.Capital, e.N, refCap)
 		}
 	}
-	if centimes(t, lineaire.Echeancier[0].Paiement) <=
-		centimes(t, lineaire.Echeancier[len(lineaire.Echeancier)-1].Paiement) {
+	if centimes(t, lineaire.Echeancier[0].Mensualite) <=
+		centimes(t, lineaire.Echeancier[len(lineaire.Echeancier)-1].Mensualite) {
 		t.Error("capital constant : l'echeance devrait decroitre")
 	}
 
@@ -319,7 +346,7 @@ func TestSignatureDeChaqueMethode(t *testing.T) {
 func TestCasDeReference(t *testing.T) {
 	moteur := NewMoteur(binaire(t), 0)
 
-	d, err := ParseDemande("250000.00", "3.45", "240", "")
+	d, err := ParseDemande(Parametres{Capital: "250000.00", Taux: "3.45", Mois: "240", Methode: ""})
 	if err != nil {
 		t.Fatalf("ParseDemande : %v", err)
 	}
@@ -329,15 +356,15 @@ func TestCasDeReference(t *testing.T) {
 	}
 
 	attendus := map[string]string{
-		"mensualite":     res.Recapitulatif.PremiereEcheance.String(),
+		"mensualite":     res.Recapitulatif.PremiereMensualite.String(),
 		"total_interets": res.Recapitulatif.TotalInterets.String(),
-		"total_du":       res.Recapitulatif.TotalDu.String(),
+		"total_verse":    res.Recapitulatif.TotalVerse.String(),
 	}
 	attendus["taeg"] = res.Recapitulatif.Taeg.String()
 	references := map[string]string{
 		"mensualite":     "1443.48",
 		"total_interets": "96436.65",
-		"total_du":       "346436.65",
+		"total_verse":    "346436.65",
 		// Dichotomie independante en Decimal Python sur les memes echeances :
 		// 3.505078595213301... soit 3.5051 a quatre decimales.
 		"taeg": "3.5051",
@@ -356,8 +383,8 @@ func TestCasDeReference(t *testing.T) {
 	// La derniere echeance absorbe le residu d'arrondi : elle differe de la
 	// mensualite nominale.
 	derniere := res.Echeancier[len(res.Echeancier)-1]
-	if derniere.Paiement.String() != "1444.93" {
-		t.Errorf("derniere echeance %s, attendu 1444.93", derniere.Paiement)
+	if derniere.Mensualite.String() != "1444.93" {
+		t.Errorf("derniere echeance %s, attendu 1444.93", derniere.Mensualite)
 	}
 }
 
@@ -369,7 +396,7 @@ func TestLeTaegNeDependPasDeLaMethode(t *testing.T) {
 
 	var reference string
 	for _, methode := range MethodesAcceptees() {
-		d, err := ParseDemande("120000.00", "4.2", "60", methode)
+		d, err := ParseDemande(Parametres{Capital: "120000.00", Taux: "4.2", Mois: "60", Methode: methode})
 		if err != nil {
 			t.Fatalf("ParseDemande : %v", err)
 		}
@@ -396,7 +423,7 @@ func TestLeTaegNeDependPasDeLaMethode(t *testing.T) {
 func TestLeTaegEstNulSansInterets(t *testing.T) {
 	moteur := NewMoteur(binaire(t), 0)
 
-	d, err := ParseDemande("10000.00", "0", "12", "")
+	d, err := ParseDemande(Parametres{Capital: "10000.00", Taux: "0", Mois: "12", Methode: ""})
 	if err != nil {
 		t.Fatalf("ParseDemande : %v", err)
 	}
@@ -414,7 +441,8 @@ func TestCalculerRemonteLEchecDuProgramme(t *testing.T) {
 
 	// Capital nul : le programme COBOL doit refuser et sortir en erreur.
 	_, err := moteur.Calculer(context.Background(), Demande{
-		CapitalCentimes: 0, TauxMillioniemes: 3450000, Mois: 12, CodeMethode: 'A',
+		CapitalCentimes: 0, TauxMillioniemes: 3450000, Mois: 12,
+		CodeMethode: 'A', CodeAssiette: 'N',
 	})
 	if err == nil {
 		t.Fatal("un capital nul aurait du faire echouer le programme")
@@ -431,7 +459,7 @@ func TestCalculerAbandonneApresLeDelai(t *testing.T) {
 	}
 
 	moteur := NewMoteur(chemin, 150*time.Millisecond)
-	d, err := ParseDemande("1000.00", "3.45", "12", "")
+	d, err := ParseDemande(Parametres{Capital: "1000.00", Taux: "3.45", Mois: "12", Methode: ""})
 	if err != nil {
 		t.Fatalf("ParseDemande : %v", err)
 	}
@@ -463,9 +491,113 @@ func TestNewMoteurRetombeSurLeDelaiParDefaut(t *testing.T) {
 
 func TestCalculerAvecUnBinaireIntrouvable(t *testing.T) {
 	moteur := NewMoteur("/inexistant/loan_amortization", 0)
-	d, _ := ParseDemande("1000.00", "3.45", "12", "")
+	d, _ := ParseDemande(Parametres{Capital: "1000.00", Taux: "3.45", Mois: "12", Methode: ""})
 
 	if _, err := moteur.Calculer(context.Background(), d); err == nil {
 		t.Fatal("un binaire absent aurait du produire une erreur")
+	}
+}
+
+// Les invariants doivent tenir avec des frais et une assurance, sur les trois
+// methodes et les deux assiettes.
+func TestInvariantsAvecFraisEtAssurance(t *testing.T) {
+	moteur := NewMoteur(binaire(t), 0)
+
+	cas := []Parametres{
+		{Capital: "250000.00", Taux: "3.45", Mois: "240", FraisDossier: "1500.00"},
+		{Capital: "250000.00", Taux: "3.45", Mois: "240",
+			FraisDossier: "1500.00", FraisGarantie: "900.00"},
+		{Capital: "250000.00", Taux: "3.45", Mois: "240",
+			TauxAssurance: "0.36", Assiette: "capital_initial"},
+		{Capital: "250000.00", Taux: "3.45", Mois: "240",
+			TauxAssurance: "0.36", Assiette: "capital_restant_du"},
+		{Capital: "120000.00", Taux: "4.2", Mois: "60",
+			FraisDossier: "800.00", TauxAssurance: "0.5", Assiette: "capital_restant_du"},
+		// Taux nul mais assurance : les flux ne sont pas triviaux pour autant.
+		{Capital: "10000.00", Taux: "0", Mois: "12",
+			TauxAssurance: "0.4", Assiette: "capital_initial"},
+	}
+
+	for _, methode := range MethodesAcceptees() {
+		for i, p := range cas {
+			p.Methode = methode
+			t.Run(fmt.Sprintf("%s/%d", methode, i), func(t *testing.T) {
+				verifierInvariants(t, moteur, p)
+			})
+		}
+	}
+}
+
+// Les frais et l'assurance doivent faire monter le TAEG, et l'assurance sur le
+// capital restant du couter moins que sur le capital initial.
+func TestLesFraisEtLAssuranceRencherissentLeTaeg(t *testing.T) {
+	moteur := NewMoteur(binaire(t), 0)
+
+	calculer := func(p Parametres) *Echeancier {
+		t.Helper()
+		p.Capital, p.Taux, p.Mois = "250000.00", "3.45", "240"
+		d, err := ParseDemande(p)
+		if err != nil {
+			t.Fatalf("ParseDemande : %v", err)
+		}
+		res, err := moteur.Calculer(context.Background(), d)
+		if err != nil {
+			t.Fatalf("Calculer : %v", err)
+		}
+		return res
+	}
+
+	nu := calculer(Parametres{})
+	avecFrais := calculer(Parametres{FraisDossier: "1500.00"})
+	surInitial := calculer(Parametres{TauxAssurance: "0.36", Assiette: "capital_initial"})
+	surRestant := calculer(Parametres{TauxAssurance: "0.36", Assiette: "capital_restant_du"})
+
+	taeg := func(e *Echeancier) int64 {
+		v, err := decimalVersEntier(e.Recapitulatif.Taeg.String(), 4)
+		if err != nil {
+			t.Fatalf("taeg illisible : %v", err)
+		}
+		return v
+	}
+
+	// Valeurs recoupees avec une dichotomie independante en Decimal Python.
+	if got := nu.Recapitulatif.Taeg.String(); got != "3.5051" {
+		t.Errorf("sans frais ni assurance : taeg %s, attendu 3.5051", got)
+	}
+	if got := avecFrais.Recapitulatif.Taeg.String(); got != "3.5752" {
+		t.Errorf("avec 1500 de frais : taeg %s, attendu 3.5752", got)
+	}
+	if got := surInitial.Recapitulatif.Taeg.String(); got != "4.1020" {
+		t.Errorf("assurance sur capital initial : taeg %s, attendu 4.1020", got)
+	}
+
+	if taeg(avecFrais) <= taeg(nu) {
+		t.Error("les frais devraient faire monter le TAEG")
+	}
+	if taeg(surInitial) <= taeg(nu) {
+		t.Error("l'assurance devrait faire monter le TAEG")
+	}
+	// Une prime assise sur le capital restant du decroit : elle coute moins.
+	if taeg(surRestant) >= taeg(surInitial) {
+		t.Error("l'assurance sur capital restant du devrait couter moins que sur capital initial")
+	}
+	if centimes(t, surRestant.Recapitulatif.TotalAssurance) >=
+		centimes(t, surInitial.Recapitulatif.TotalAssurance) {
+		t.Error("le total d'assurance sur capital restant du devrait etre inferieur")
+	}
+
+	// Sans assurance, la colonne reste a zero partout.
+	for _, e := range nu.Echeancier {
+		if e.Assurance.String() != "0.00" {
+			t.Fatalf("assurance %s a l'echeance %d alors qu'aucune n'est souscrite",
+				e.Assurance, e.N)
+		}
+	}
+	// Sur capital initial, la prime est constante.
+	ref := surInitial.Echeancier[0].Assurance.String()
+	for _, e := range surInitial.Echeancier {
+		if e.Assurance.String() != ref {
+			t.Fatalf("prime %s a l'echeance %d, attendu %s constante", e.Assurance, e.N, ref)
+		}
 	}
 }

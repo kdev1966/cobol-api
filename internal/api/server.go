@@ -116,12 +116,13 @@ func (s *Serveur) index(w http.ResponseWriter, r *http.Request) {
 		"openapi":        "/openapi.json",
 		"endpoints": []map[string]any{
 			{
-				"method":             "GET",
-				"path":               "/v1/loans/schedule?capital=&taux=&mois=&methode=",
-				"auth":               true,
-				"description":        "Echeancier de pret",
-				"methodes":           loan.MethodesAcceptees(),
-				"methode_par_defaut": loan.MethodeParDefaut,
+				"method":              "GET",
+				"path":                "/v1/loans/schedule?capital=&taux=&mois=&methode=&frais_dossier=&frais_garantie=&taux_assurance=&assiette_assurance=",
+				"auth":                true,
+				"description":         "Echeancier de pret",
+				"methodes":            loan.MethodesAcceptees(),
+				"methode_par_defaut":  loan.MethodeParDefaut,
+				"assiettes_assurance": loan.AssiettesAcceptees(),
 			},
 			{
 				"method":      "GET",
@@ -163,8 +164,16 @@ func (s *Serveur) sante(w http.ResponseWriter, r *http.Request) {
 
 func (s *Serveur) echeancier(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	demande, err := loan.ParseDemande(
-		q.Get("capital"), q.Get("taux"), q.Get("mois"), q.Get("methode"))
+	demande, err := loan.ParseDemande(loan.Parametres{
+		Capital:       q.Get("capital"),
+		Taux:          q.Get("taux"),
+		Mois:          q.Get("mois"),
+		Methode:       q.Get("methode"),
+		FraisDossier:  q.Get("frais_dossier"),
+		FraisGarantie: q.Get("frais_garantie"),
+		TauxAssurance: q.Get("taux_assurance"),
+		Assiette:      q.Get("assiette_assurance"),
+	})
 	if err != nil {
 		var invalide *loan.ErreurValidation
 		if errors.As(err, &invalide) {

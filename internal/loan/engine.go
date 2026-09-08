@@ -27,6 +27,8 @@ const (
 	TauxMax    = 99999999 // 99.999999 %, en millioniemes
 	MoisMin    = 1
 	MoisMax    = 600
+	// Les frais tiennent dans un PIC 9(9)V99.
+	FraisMax = 99999999999
 )
 
 // Demande est une demande d'echeancier deja validee.
@@ -35,13 +37,23 @@ type Demande struct {
 	CapitalCentimes int64 `json:"-"`
 	// TauxMillioniemes porte le taux nominal annuel, 3.45 % valant 3450000.
 	TauxMillioniemes int64 `json:"-"`
-	// CodeMethode est la lettre attendue par le programme COBOL.
-	CodeMethode byte `json:"-"`
+	// CodeMethode et CodeAssiette sont les lettres attendues par le
+	// programme COBOL.
+	CodeMethode  byte `json:"-"`
+	CodeAssiette byte `json:"-"`
 
-	Mois    int    `json:"mois"`
-	Capital string `json:"capital"`
-	Taux    string `json:"taux"`
-	Methode string `json:"methode"`
+	FraisDossierCentimes  int64 `json:"-"`
+	FraisGarantieCentimes int64 `json:"-"`
+	TauxAssuranceMillion  int64 `json:"-"`
+
+	Mois          int    `json:"mois"`
+	Capital       string `json:"capital"`
+	Taux          string `json:"taux"`
+	Methode       string `json:"methode"`
+	FraisDossier  string `json:"frais_dossier"`
+	FraisGarantie string `json:"frais_garantie"`
+	TauxAssurance string `json:"taux_assurance"`
+	AssietteAssur string `json:"assiette_assurance"`
 }
 
 // Format des enregistrements rendus par le programme COBOL. Les positions
@@ -49,8 +61,8 @@ type Demande struct {
 const (
 	tagRecap     = 'R'
 	tagEcheance  = 'E'
-	longRecap    = 67
-	longEcheance = 57
+	longRecap    = 110
+	longEcheance = 83
 )
 
 // Recapitulatif est la premiere ligne rendue par le programme COBOL.
@@ -61,26 +73,36 @@ const (
 // perdue au moment de la relecture.
 type Recapitulatif struct {
 	Echeances int `json:"echeances"`
-	// Sous la methode a annuite constante, toutes les echeances sauf la
-	// derniere valent PremiereEcheance. Sous les deux autres, l'echeance
-	// varie a chaque periode.
-	PremiereEcheance json.Number `json:"premiere_echeance"`
-	DerniereEcheance json.Number `json:"derniere_echeance"`
-	TotalInterets    json.Number `json:"total_interets"`
-	TotalDu          json.Number `json:"total_du"`
+	// Sous la methode a annuite constante et sans assurance sur le capital
+	// restant du, toutes les mensualites sauf la derniere valent
+	// PremiereMensualite. Sous les autres combinaisons, elle varie.
+	PremiereMensualite json.Number `json:"premiere_mensualite"`
+	DerniereMensualite json.Number `json:"derniere_mensualite"`
+	TotalInterets      json.Number `json:"total_interets"`
+	TotalAssurance     json.Number `json:"total_assurance"`
+	TotalFrais         json.Number `json:"total_frais"`
+	// TotalVerse est la somme des mensualites, frais initiaux exclus.
+	TotalVerse json.Number `json:"total_verse"`
+	// CoutCredit agrege interets, assurance et frais.
+	CoutCredit json.Number `json:"cout_credit"`
 	// Taeg est le taux actuariel annuel qui egalise la valeur actuelle des
-	// echeances au capital emprunte, resolu par le programme COBOL sur les
-	// echeances reellement arrondies.
+	// versements au montant reellement percu, capital diminue des frais.
+	// Des lors que des frais ou une assurance entrent dans les flux, aucune
+	// formule fermee ne le donne : il est resolu par dichotomie.
 	Taeg json.Number `json:"taeg"`
 }
 
 // Echeance est une ligne de l'echeancier.
 type Echeance struct {
-	N        int         `json:"n"`
-	Paiement json.Number `json:"paiement"`
-	Interets json.Number `json:"interets"`
-	Capital  json.Number `json:"capital"`
-	Solde    json.Number `json:"solde"`
+	N int `json:"n"`
+	// Echeance est la part de credit : capital + interets.
+	Echeance  json.Number `json:"echeance"`
+	Interets  json.Number `json:"interets"`
+	Capital   json.Number `json:"capital"`
+	Assurance json.Number `json:"assurance"`
+	// Mensualite est ce que l'emprunteur verse : echeance + assurance.
+	Mensualite json.Number `json:"mensualite"`
+	Solde      json.Number `json:"solde"`
 }
 
 // Echeancier est le resultat complet d'un calcul.
@@ -120,11 +142,15 @@ func NewMoteur(chemin string, delai time.Duration) *Moteur {
 	return &Moteur{Chemin: chemin, Delai: delai}
 }
 
-// ligneEntree rend les 26 caracteres attendus par le programme : capital
-// 9(11)V99, taux 9(2)V9(6), duree 9(4), puis la lettre de la methode.
+// ligneEntree rend les 57 caracteres attendus par le programme : capital
+// 9(11)V99, taux 9(2)V9(6), duree 9(4), frais de dossier et de garantie
+// 9(9)V99, taux d'assurance 9(2)V9(6), puis les lettres de la methode et de
+// l'assiette d'assurance.
 func ligneEntree(d Demande) string {
-	return fmt.Sprintf("%013d%08d%04d%c\n",
-		d.CapitalCentimes, d.TauxMillioniemes, d.Mois, d.CodeMethode)
+	return fmt.Sprintf("%013d%08d%04d%011d%011d%08d%c%c\n",
+		d.CapitalCentimes, d.TauxMillioniemes, d.Mois,
+		d.FraisDossierCentimes, d.FraisGarantieCentimes,
+		d.TauxAssuranceMillion, d.CodeMethode, d.CodeAssiette)
 }
 
 // Calculer produit l'echeancier de la demande.
@@ -241,20 +267,28 @@ func lireRecapitulatif(ligne string, r *Recapitulatif) error {
 	if r.Echeances, err = entier(ligne[1:5]); err != nil {
 		return fmt.Errorf("recapitulatif illisible : %w", err)
 	}
-	if r.PremiereEcheance, err = montant(ligne[5:18]); err != nil {
-		return fmt.Errorf("recapitulatif illisible : %w", err)
+
+	champs := []struct {
+		cible *json.Number
+		debut int
+		fin   int
+	}{
+		{&r.PremiereMensualite, 5, 18},
+		{&r.DerniereMensualite, 18, 31},
+		{&r.TotalInterets, 31, 46},
+		{&r.TotalAssurance, 46, 61},
+		{&r.TotalFrais, 61, 74},
+		{&r.TotalVerse, 74, 89},
+		{&r.CoutCredit, 89, 104},
 	}
-	if r.DerniereEcheance, err = montant(ligne[18:31]); err != nil {
-		return fmt.Errorf("recapitulatif illisible : %w", err)
+	for _, c := range champs {
+		if *c.cible, err = montant(ligne[c.debut:c.fin]); err != nil {
+			return fmt.Errorf("recapitulatif illisible : %w", err)
+		}
 	}
-	if r.TotalInterets, err = montant(ligne[31:46]); err != nil {
-		return fmt.Errorf("recapitulatif illisible : %w", err)
-	}
-	if r.TotalDu, err = montant(ligne[46:61]); err != nil {
-		return fmt.Errorf("recapitulatif illisible : %w", err)
-	}
+
 	// Le TAEG est un pourcentage a quatre decimales, pas un montant.
-	if r.Taeg, err = nombre(ligne[61:67], 4); err != nil {
+	if r.Taeg, err = nombre(ligne[104:110], 4); err != nil {
 		return fmt.Errorf("recapitulatif illisible : %w", err)
 	}
 	return nil
@@ -265,17 +299,23 @@ func lireEcheance(ligne string, e *Echeance) error {
 	if e.N, err = entier(ligne[1:5]); err != nil {
 		return fmt.Errorf("echeance illisible : %w", err)
 	}
-	if e.Paiement, err = montant(ligne[5:18]); err != nil {
-		return fmt.Errorf("echeance illisible : %w", err)
+
+	champs := []struct {
+		cible *json.Number
+		debut int
+		fin   int
+	}{
+		{&e.Echeance, 5, 18},
+		{&e.Interets, 18, 31},
+		{&e.Capital, 31, 44},
+		{&e.Assurance, 44, 57},
+		{&e.Mensualite, 57, 70},
+		{&e.Solde, 70, 83},
 	}
-	if e.Interets, err = montant(ligne[18:31]); err != nil {
-		return fmt.Errorf("echeance illisible : %w", err)
-	}
-	if e.Capital, err = montant(ligne[31:44]); err != nil {
-		return fmt.Errorf("echeance illisible : %w", err)
-	}
-	if e.Solde, err = montant(ligne[44:57]); err != nil {
-		return fmt.Errorf("echeance illisible : %w", err)
+	for _, c := range champs {
+		if *c.cible, err = montant(ligne[c.debut:c.fin]); err != nil {
+			return fmt.Errorf("echeance illisible : %w", err)
+		}
 	}
 	return nil
 }

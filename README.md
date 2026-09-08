@@ -26,20 +26,27 @@ curl -s -H "X-API-Key: $K" \
 {
   "status": "success",
   "demande": {
-    "capital": "250000.00", "taux": "3.450000",
-    "mois": 240, "methode": "annuite_constante"
+    "capital": "250000.00", "taux": "3.450000", "mois": 240,
+    "methode": "annuite_constante",
+    "frais_dossier": "0.00", "frais_garantie": "0.00",
+    "taux_assurance": "0.000000", "assiette_assurance": "aucune"
   },
   "recapitulatif": {
     "echeances": 240,
-    "premiere_echeance": 1443.48,
-    "derniere_echeance": 1444.93,
+    "premiere_mensualite": 1443.48,
+    "derniere_mensualite": 1444.93,
     "total_interets": 96436.65,
-    "total_du": 346436.65,
+    "total_assurance": 0.00,
+    "total_frais": 0.00,
+    "total_verse": 346436.65,
+    "cout_credit": 96436.65,
     "taeg": 3.5051
   },
   "echeancier": [
-    { "n": 1, "paiement": 1443.48, "interets": 718.75, "capital": 724.73, "solde": 249275.27 },
-    { "n": 240, "paiement": 1444.93, "interets": 4.14, "capital": 1440.79, "solde": 0.00 }
+    { "n": 1, "echeance": 1443.48, "interets": 718.75, "capital": 724.73,
+      "assurance": 0.00, "mensualite": 1443.48, "solde": 249275.27 },
+    { "n": 240, "echeance": 1444.93, "interets": 4.14, "capital": 1440.79,
+      "assurance": 0.00, "mensualite": 1444.93, "solde": 0.00 }
   ]
 }
 ```
@@ -65,11 +72,35 @@ Sous `annuite_constante`, toutes les échéances sauf la dernière valent
 `premiere_echeance`. Sous les deux autres méthodes, l'échéance varie à chaque
 période ; le récapitulatif rend donc la première et la dernière.
 
+## Frais et assurance
+
+Quatre paramètres facultatifs entrent dans les flux :
+
+| Paramètre | Effet |
+|---|---|
+| `frais_dossier`, `frais_garantie` | Versés au départ. Ils diminuent ce que l'emprunteur perçoit **sans réduire ce qu'il rembourse**, et font donc monter le TAEG. |
+| `taux_assurance` | Taux annuel de l'assurance emprunteur, en pourcent. |
+| `assiette_assurance` | `capital_initial` — prime constante ; `capital_restant_du` — prime décroissante ; `aucune`. Un taux déclaré sans assiette porte sur le capital initial. |
+
+Sur 250 000 € à 3,45 % sur 240 mois :
+
+| | TAEG | coût du crédit |
+|---|---|---|
+| Nu | 3,5051 % | 96 436,65 € |
+| + 1 500 € de frais de dossier | 3,5752 % | 97 936,65 € |
+| + assurance 0,36 % sur capital initial | 4,1020 % | 114 436,65 € |
+| + 2 400 € de frais et assurance sur capital restant dû | 3,9926 % | 108 899,58 € |
+
+Chaque ligne de l'échéancier distingue `echeance` (capital + intérêts) de
+`mensualite` (échéance + assurance), ce que l'emprunteur verse réellement.
+
 ## Le TAEG
 
 Le TAEG rendu est le taux actuariel annuel qui égalise la valeur actuelle des
-échéances au capital emprunté. Il **n'est pas déduit** du taux nominal : comme
-les échéances sont arrondies au centime, il faut le résoudre. Le programme
+versements au montant **réellement perçu**, soit le capital diminué des frais.
+Il **n'est pas déduit** du taux nominal : dès que des frais ou une assurance
+entrent dans les flux, aucune formule fermée ne le donne. Et même sans eux, les
+échéances étant arrondies au centime, il faut le résoudre. Le programme
 COBOL le fait par dichotomie sur le taux périodique, en arithmétique décimale
 exacte, puis capitalise sur douze mois.
 
@@ -77,24 +108,24 @@ Sur le cas de référence, la dichotomie converge vers 3,505078595 %, soit
 **3,5051 %** à quatre décimales — valeur recoupée avec une résolution
 indépendante en `Decimal` Python sur les mêmes échéances.
 
-En l'absence de frais, le TAEG ne dépend que du taux nominal : il vaut la même
-chose pour les trois méthodes d'amortissement. La suite de tests le vérifie
-comme une propriété du domaine.
-
-Ce calcul a un coût : sur un échéancier de 240 mois, la requête passe de
-7,3 ms à **19,5 ms**. C'est le prix d'une résolution honnête, qui restera juste
-le jour où des frais de dossier ou une assurance entreront dans les flux — là
-où une formule fermée deviendrait fausse.
+En l'absence de frais **et** d'assurance, le TAEG ne dépend que du taux
+nominal : il vaut la même chose pour les trois méthodes d'amortissement. La
+suite de tests le vérifie comme une propriété du domaine. Dès qu'un frais ou
+une prime apparaît, cette propriété tombe — et c'est exactement là que la
+résolution gagne son coût d'une douzaine de millisecondes.
 
 ## Les invariants
 
-Le moteur tient quatre garanties, vérifiées par la suite de tests sur neuf
-jeux de paramètres allant du taux nul à 600 mensualités :
+Le moteur tient six garanties, vérifiées par la suite de tests sur neuf jeux de
+paramètres allant du taux nul à 600 mensualités, puis sur six combinaisons de
+frais et d'assurance, le tout pour chacune des trois méthodes :
 
 1. la somme des parts de capital égale **exactement** le capital emprunté ;
 2. la somme des échéances égale **exactement** capital + intérêts ;
 3. le solde après la dernière échéance est **exactement** nul ;
-4. sur chaque ligne, paiement = capital + intérêts.
+4. sur chaque ligne, échéance = capital + intérêts ;
+5. sur chaque ligne, mensualité = échéance + assurance ;
+6. le total versé égale la somme des mensualités.
 
 Les montants ne transitent jamais par un flottant : le COBOL écrit des
 chiffres, Go y insère le point décimal et les transporte en `json.Number`
@@ -149,21 +180,26 @@ donc en tenir compte avant de se fier au plafond.
 ## Contrat du programme COBOL
 
 Le binaire est autonome et testable sans la couche Go. Il lit sur son entrée
-standard **une ligne de 26 caractères** — capital `9(11)V99`, taux annuel
-`9(2)V9(6)`, durée `9(4)`, puis la lettre de la méthode (`A`, `C` ou `I`) — et
-écrit des enregistrements à largeur fixe :
+standard **une ligne de 57 caractères** — capital `9(11)V99`, taux annuel
+`9(2)V9(6)`, durée `9(4)`, frais de dossier et de garantie `9(9)V99`, taux
+d'assurance `9(2)V9(6)`, puis les lettres de la méthode (`A`, `C`, `I`) et de
+l'assiette d'assurance (`N`, `I`, `R`) — et écrit des enregistrements à largeur
+fixe :
 
 ```
-R + échéances 9(4) + première et dernière échéance 9(11)V99
-                   + total intérêts et total dû 9(13)V99
-                   + TAEG 9(2)V9(4)                                           67 car.
-E + numéro    9(4) + paiement, intérêts, capital, solde 9(11)V99              57 car.
+R + échéances 9(4) + première et dernière mensualité 9(11)V99
+                   + total intérêts et total assurance 9(13)V99
+                   + total frais 9(9)V99
+                   + total versé et coût du crédit 9(13)V99
+                   + TAEG 9(2)V9(4)                                          110 car.
+E + numéro    9(4) + échéance, intérêts, capital, assurance,
+                     mensualité, solde 9(11)V99                               83 car.
 ```
 
 ```sh
-$ echo "0000025000000034500000240A" | ./bin/loan_amortization | head -2
-R024000000001443480000000144493000000009643665000000034643665035051
-E00010000000144348000000007187500000000724730000024927527
+$ echo "0000025000000034500000240000000000000000000000000000000AN" | ./bin/loan_amortization | head -2
+R0240000000014434800000001444930000000096436650000000000000000000000000000000000034643665000000009643665035051
+E0001000000014434800000000718750000000072473000000000000000000001443480000024927527
 ```
 
 Codes de sortie : `2` si l'entrée est malformée, `3` si le capital ou la durée
@@ -234,4 +270,6 @@ privilégié et n'écrit rien sur disque.
 - Les échéances sont mensuelles. Aucune autre périodicité n'est proposée.
 - Le taux périodique est **proportionnel** (taux nominal annuel divisé par
   douze), et non le taux actuariel équivalent. C'est un choix, pas un oubli.
-- Ni assurance, ni frais de dossier, ni échéances irrégulières.
+- Pas d'échéances irrégulières, de différé d'amortissement ni de remboursement anticipé.
+- Le taux d'usure n'est pas vérifié : le service ne dit pas si le TAEG rendu
+  dépasse le plafond réglementaire de la catégorie de prêt.

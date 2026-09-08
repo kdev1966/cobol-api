@@ -58,7 +58,7 @@ func TestParseDemandeAccepteLesBornes(t *testing.T) {
 	}
 
 	for _, c := range cas {
-		if _, err := ParseDemande(c.capital, c.taux, c.mois, ""); err != nil {
+		if _, err := ParseDemande(Parametres{Capital: c.capital, Taux: c.taux, Mois: c.mois, Methode: ""}); err != nil {
 			t.Errorf("ParseDemande(%q,%q,%q) : %v", c.capital, c.taux, c.mois, err)
 		}
 	}
@@ -81,7 +81,7 @@ func TestParseDemandeRefuseHorsBornes(t *testing.T) {
 	}
 
 	for _, c := range cas {
-		_, err := ParseDemande(c.capital, c.taux, c.mois, "")
+		_, err := ParseDemande(Parametres{Capital: c.capital, Taux: c.taux, Mois: c.mois, Methode: ""})
 		if err == nil {
 			t.Errorf("%s : aurait du echouer", c.nom)
 			continue
@@ -98,19 +98,46 @@ func TestParseDemandeRefuseHorsBornes(t *testing.T) {
 }
 
 func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
-	d, err := ParseDemande("250000.00", "3.45", "240", "")
+	d, err := ParseDemande(Parametres{Capital: "250000.00", Taux: "3.45", Mois: "240", Methode: ""})
 	if err != nil {
 		t.Fatalf("ParseDemande : %v", err)
 	}
 
 	ligne := ligneEntree(d)
-	// 13 chiffres de capital, 8 de taux, 4 de duree, puis la lettre de la
-	// methode. La longueur est un contrat avec le PIC X(26) du COBOL.
-	if got, want := ligne, "0000025000000034500000240A\n"; got != want {
-		t.Errorf("ligneEntree = %q, attendu %q", got, want)
+	// 13 chiffres de capital, 8 de taux, 4 de duree, 11 de frais de dossier,
+	// 11 de frais de garantie, 8 de taux d'assurance, puis les lettres de la
+	// methode et de l'assiette. La longueur est un contrat avec le PIC X(57)
+	// du COBOL.
+	want := "0000025000000034500000240" + "00000000000" + "00000000000" +
+		"00000000" + "AN\n"
+	if ligne != want {
+		t.Errorf("ligneEntree = %q, attendu %q", ligne, want)
 	}
-	if len(ligne)-1 != 26 {
-		t.Errorf("longueur %d, attendu 26", len(ligne)-1)
+	if len(ligne)-1 != 57 {
+		t.Errorf("longueur %d, attendu 57", len(ligne)-1)
+	}
+
+	// Les frais et l'assurance doivent se retrouver a leurs positions.
+	avecFrais, err := ParseDemande(Parametres{
+		Capital: "250000.00", Taux: "3.45", Mois: "240",
+		FraisDossier: "1500.00", FraisGarantie: "900.50",
+		TauxAssurance: "0.36", Assiette: "capital_restant_du",
+	})
+	if err != nil {
+		t.Fatalf("ParseDemande : %v", err)
+	}
+	l := ligneEntree(avecFrais)
+	if got := l[25:36]; got != "00000150000" {
+		t.Errorf("frais de dossier a la position 26 : %q", got)
+	}
+	if got := l[36:47]; got != "00000090050" {
+		t.Errorf("frais de garantie a la position 37 : %q", got)
+	}
+	if got := l[47:55]; got != "00360000" {
+		t.Errorf("taux d'assurance a la position 48 : %q", got)
+	}
+	if got := l[55:57]; got != "AR" {
+		t.Errorf("lettres de methode et d'assiette : %q", got)
 	}
 
 	// Chaque methode doit poser sa lettre.
@@ -119,11 +146,11 @@ func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
 		"capital_constant":  'C',
 		"in_fine":           'I',
 	} {
-		d, err := ParseDemande("250000.00", "3.45", "240", saisie)
+		d, err := ParseDemande(Parametres{Capital: "250000.00", Taux: "3.45", Mois: "240", Methode: saisie})
 		if err != nil {
 			t.Fatalf("ParseDemande(%q) : %v", saisie, err)
 		}
-		if got := ligneEntree(d)[25]; got != lettre {
+		if got := ligneEntree(d)[55]; got != lettre {
 			t.Errorf("methode %q : lettre %q, attendu %q", saisie, got, lettre)
 		}
 	}
@@ -145,6 +172,77 @@ func TestFormaterEchelle(t *testing.T) {
 		if got := formaterEchelle(c.valeur, c.decimales); got != c.attendu {
 			t.Errorf("formaterEchelle(%d, %d) = %q, attendu %q",
 				c.valeur, c.decimales, got, c.attendu)
+		}
+	}
+}
+
+func TestAssietteDAssurance(t *testing.T) {
+	cas := []struct {
+		nom, taux, assiette string
+		code                byte
+		libelle             string
+	}{
+		// Sans taux ni assiette declares, il n'y a pas d'assurance.
+		{"rien", "", "", 'N', "aucune"},
+		// Un taux sans assiette porte sur le capital initial, convention la
+		// plus repandue.
+		{"taux seul", "0.36", "", 'I', "capital_initial"},
+		{"assiette explicite", "0.36", "capital_restant_du", 'R', "capital_restant_du"},
+		{"aucune malgre le taux", "0.36", "aucune", 'N', "aucune"},
+		{"alias", "0.36", "R", 'R', "capital_restant_du"},
+	}
+
+	for _, c := range cas {
+		d, err := ParseDemande(Parametres{
+			Capital: "1000.00", Taux: "3.45", Mois: "12",
+			TauxAssurance: c.taux, Assiette: c.assiette,
+		})
+		if err != nil {
+			t.Errorf("%s : %v", c.nom, err)
+			continue
+		}
+		if d.CodeAssiette != c.code {
+			t.Errorf("%s : code %q, attendu %q", c.nom, d.CodeAssiette, c.code)
+		}
+		if d.AssietteAssur != c.libelle {
+			t.Errorf("%s : libelle %q, attendu %q", c.nom, d.AssietteAssur, c.libelle)
+		}
+	}
+}
+
+func TestParseDemandeRefuseLesFraisAberrants(t *testing.T) {
+	cas := []struct {
+		nom   string
+		p     Parametres
+		champ string
+	}{
+		{"frais superieurs au capital", Parametres{
+			Capital: "1000.00", Taux: "3.45", Mois: "12", FraisDossier: "1000.00",
+		}, "frais_dossier"},
+		{"frais cumules egaux au capital", Parametres{
+			Capital: "1000.00", Taux: "3.45", Mois: "12",
+			FraisDossier: "600.00", FraisGarantie: "400.00",
+		}, "frais_dossier"},
+		{"frais negatifs", Parametres{
+			Capital: "1000.00", Taux: "3.45", Mois: "12", FraisDossier: "-5",
+		}, "frais_dossier"},
+		{"taux d'assurance hors bornes", Parametres{
+			Capital: "1000.00", Taux: "3.45", Mois: "12", TauxAssurance: "100",
+		}, "taux_assurance"},
+		{"assiette inconnue", Parametres{
+			Capital: "1000.00", Taux: "3.45", Mois: "12", Assiette: "forfaitaire",
+		}, "assiette_assurance"},
+	}
+
+	for _, c := range cas {
+		_, err := ParseDemande(c.p)
+		if err == nil {
+			t.Errorf("%s : aurait du echouer", c.nom)
+			continue
+		}
+		invalide, ok := err.(*ErreurValidation)
+		if !ok || invalide.Champ != c.champ {
+			t.Errorf("%s : erreur %v, champ attendu %q", c.nom, err, c.champ)
 		}
 	}
 }

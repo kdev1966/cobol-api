@@ -3,32 +3,59 @@
   "info": {
     "title": "cobol-api",
     "version": "1.0.0",
-    "description": "Moteur d'amortissement de pret ecrit en COBOL, expose en REST.\n\nLes montants sont rendus comme des nombres JSON a deux decimales exactes, produits par une arithmetique decimale a virgule fixe. Ils ne transitent jamais par un flottant binaire.\n\nQuatre invariants sont tenus : la somme des parts de capital egale exactement le capital emprunte, la somme des echeances egale exactement capital plus interets, le solde apres la derniere echeance est exactement nul, et chaque ligne verifie paiement = capital + interets. La derniere echeance absorbe le residu d'arrondi.",
-    "license": { "name": "Proprietaire" }
+    "description": "Moteur d'amortissement de pret ecrit en COBOL, expose en REST.\n\nLes montants sont rendus comme des nombres JSON a deux decimales exactes, produits par une arithmetique decimale a virgule fixe. Ils ne transitent jamais par un flottant binaire.\n\nSix invariants sont tenus : la somme des parts de capital egale exactement le capital emprunte, la somme des echeances egale exactement capital plus interets, le solde apres la derniere echeance est exactement nul, chaque ligne verifie echeance = capital + interets, chaque ligne verifie mensualite = echeance + assurance, et le total verse egale la somme des mensualites. La derniere echeance absorbe le residu d'arrondi.\n\nLe TAEG est le taux actuariel annuel qui egalise la valeur actuelle des versements au montant reellement percu, soit le capital diminue des frais. Des lors que des frais ou une assurance entrent dans les flux, aucune formule fermee ne le donne : il est resolu par dichotomie.",
+    "license": {
+      "name": "Proprietaire"
+    }
   },
-  "servers": [{ "url": "http://localhost:3000", "description": "Developpement local" }],
-  "tags": [
-    { "name": "credit", "description": "Calculs de credit" },
-    { "name": "service", "description": "Etat et description du service" }
+  "servers": [
+    {
+      "url": "http://localhost:3000",
+      "description": "Developpement local"
+    }
   ],
-  "security": [{ "cleAPI": [] }],
+  "tags": [
+    {
+      "name": "credit",
+      "description": "Calculs de credit"
+    },
+    {
+      "name": "service",
+      "description": "Etat et description du service"
+    }
+  ],
+  "security": [
+    {
+      "cleAPI": []
+    }
+  ],
   "paths": {
     "/": {
       "get": {
-        "tags": ["service"],
+        "tags": [
+          "service"
+        ],
         "summary": "Index du service",
         "security": [],
         "responses": {
           "200": {
             "description": "Description du service et liste des endpoints",
-            "content": { "application/json": { "schema": { "type": "object" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           }
         }
       }
     },
     "/health": {
       "get": {
-        "tags": ["service"],
+        "tags": [
+          "service"
+        ],
         "summary": "Etat du service",
         "description": "Verifie la presence du binaire COBOL. Le HEALTHCHECK du conteneur s'appuie sur cet endpoint, qui reste ouvert et hors plafond de debit.",
         "security": [],
@@ -37,7 +64,9 @@
             "description": "Service operationnel",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/Sante" },
+                "schema": {
+                  "$ref": "#/components/schemas/Sante"
+                },
                 "example": {
                   "status": "OK",
                   "timestamp": "2026-09-08T21:38:38Z",
@@ -49,7 +78,11 @@
           "503": {
             "description": "Binaire COBOL introuvable",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/Sante" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sante"
+                }
+              }
             }
           }
         }
@@ -57,20 +90,30 @@
     },
     "/openapi.json": {
       "get": {
-        "tags": ["service"],
+        "tags": [
+          "service"
+        ],
         "summary": "Cette specification",
         "security": [],
         "responses": {
           "200": {
             "description": "Document OpenAPI",
-            "content": { "application/json": { "schema": { "type": "object" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/loans/schedule": {
       "get": {
-        "tags": ["credit"],
+        "tags": [
+          "credit"
+        ],
         "summary": "Echeancier de pret",
         "description": "Produit l'echeancier complet et son recapitulatif, TAEG compris. Le TAEG est resolu par dichotomie sur les echeances reellement arrondies, non deduit du taux nominal.",
         "operationId": "echeancier",
@@ -80,7 +123,10 @@
             "in": "query",
             "required": true,
             "description": "Montant emprunte, en unites monetaires, avec au plus deux decimales.",
-            "schema": { "type": "string", "pattern": "^\\d+(\\.\\d{1,2})?$" },
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+(\\.\\d{1,2})?$"
+            },
             "example": "250000.00"
           },
           {
@@ -88,7 +134,10 @@
             "in": "query",
             "required": true,
             "description": "Taux nominal annuel en pourcent, avec au plus six decimales. Le taux periodique en est deduit par division par douze (taux proportionnel).",
-            "schema": { "type": "string", "pattern": "^\\d{1,2}(\\.\\d{1,6})?$" },
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,2}(\\.\\d{1,6})?$"
+            },
             "example": "3.45"
           },
           {
@@ -96,7 +145,11 @@
             "in": "query",
             "required": true,
             "description": "Duree en mensualites.",
-            "schema": { "type": "integer", "minimum": 1, "maximum": 600 },
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600
+            },
             "example": 240
           },
           {
@@ -106,8 +159,62 @@
             "description": "Methode d'amortissement. Les lettres A, C et I sont acceptees comme alias.",
             "schema": {
               "type": "string",
-              "enum": ["annuite_constante", "capital_constant", "in_fine"],
+              "enum": [
+                "annuite_constante",
+                "capital_constant",
+                "in_fine"
+              ],
               "default": "annuite_constante"
+            }
+          },
+          {
+            "name": "frais_dossier",
+            "in": "query",
+            "required": false,
+            "description": "Frais de dossier, verses au depart. Ils diminuent ce que l'emprunteur percoit sans reduire ce qu'il rembourse, et font donc monter le TAEG.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+(\\.\\d{1,2})?$",
+              "default": "0"
+            },
+            "example": "1500.00"
+          },
+          {
+            "name": "frais_garantie",
+            "in": "query",
+            "required": false,
+            "description": "Frais de garantie, verses au depart. Meme traitement que les frais de dossier.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+(\\.\\d{1,2})?$",
+              "default": "0"
+            }
+          },
+          {
+            "name": "taux_assurance",
+            "in": "query",
+            "required": false,
+            "description": "Taux annuel d'assurance emprunteur en pourcent. La prime mensuelle en est deduite par division par douze.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,2}(\\.\\d{1,6})?$",
+              "default": "0"
+            },
+            "example": "0.36"
+          },
+          {
+            "name": "assiette_assurance",
+            "in": "query",
+            "required": false,
+            "description": "Assiette de la prime. Un taux d'assurance sans assiette declaree porte sur le capital initial, convention la plus repandue. Les lettres N, I et R sont acceptees comme alias.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "aucune",
+                "capital_initial",
+                "capital_restant_du"
+              ],
+              "default": "aucune"
             }
           }
         ],
@@ -116,7 +223,9 @@
             "description": "Echeancier calcule",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/Reponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/Reponse"
+                }
               }
             }
           },
@@ -124,7 +233,9 @@
             "description": "Parametre absent ou hors bornes. Le champ fautif est nomme.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/Erreur" },
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                },
                 "example": {
                   "status": "error",
                   "champ": "mois",
@@ -136,25 +247,41 @@
           "401": {
             "description": "Cle d'API absente ou invalide",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/Erreur" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
             }
           },
           "429": {
             "description": "Plafond de requetes par minute atteint",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/Erreur" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
             }
           },
           "500": {
             "description": "Echec du moteur de calcul",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/Erreur" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
             }
           },
           "504": {
             "description": "Le calcul a depasse son delai",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/Erreur" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
             }
           }
         }
@@ -173,19 +300,42 @@
     "schemas": {
       "Sante": {
         "type": "object",
-        "required": ["status", "timestamp", "programExists"],
+        "required": [
+          "status",
+          "timestamp",
+          "programExists"
+        ],
         "properties": {
-          "status": { "type": "string", "enum": ["OK", "ERROR"] },
-          "timestamp": { "type": "string", "format": "date-time" },
-          "programExists": { "type": "boolean" }
+          "status": {
+            "type": "string",
+            "enum": [
+              "OK",
+              "ERROR"
+            ]
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "programExists": {
+            "type": "boolean"
+          }
         }
       },
       "Erreur": {
         "type": "object",
-        "required": ["status", "message"],
+        "required": [
+          "status",
+          "message"
+        ],
         "properties": {
-          "status": { "type": "string", "const": "error" },
-          "message": { "type": "string" },
+          "status": {
+            "type": "string",
+            "const": "error"
+          },
+          "message": {
+            "type": "string"
+          },
           "champ": {
             "type": "string",
             "description": "Present sur les 400 : nomme le parametre fautif."
@@ -195,14 +345,56 @@
       "Demande": {
         "type": "object",
         "description": "Les parametres tels que le service les a compris, apres normalisation.",
-        "required": ["capital", "taux", "mois", "methode"],
+        "required": [
+          "capital",
+          "taux",
+          "mois",
+          "methode",
+          "frais_dossier",
+          "frais_garantie",
+          "taux_assurance",
+          "assiette_assurance"
+        ],
         "properties": {
-          "capital": { "type": "string", "example": "250000.00" },
-          "taux": { "type": "string", "example": "3.450000" },
-          "mois": { "type": "integer", "example": 240 },
+          "capital": {
+            "type": "string",
+            "example": "250000.00"
+          },
+          "taux": {
+            "type": "string",
+            "example": "3.450000"
+          },
+          "mois": {
+            "type": "integer",
+            "example": 240
+          },
           "methode": {
             "type": "string",
-            "enum": ["annuite_constante", "capital_constant", "in_fine"]
+            "enum": [
+              "annuite_constante",
+              "capital_constant",
+              "in_fine"
+            ]
+          },
+          "frais_dossier": {
+            "type": "string",
+            "example": "1500.00"
+          },
+          "frais_garantie": {
+            "type": "string",
+            "example": "900.00"
+          },
+          "taux_assurance": {
+            "type": "string",
+            "example": "0.360000"
+          },
+          "assiette_assurance": {
+            "type": "string",
+            "enum": [
+              "aucune",
+              "capital_initial",
+              "capital_restant_du"
+            ]
           }
         }
       },
@@ -210,41 +402,99 @@
         "type": "object",
         "required": [
           "echeances",
-          "premiere_echeance",
-          "derniere_echeance",
+          "premiere_mensualite",
+          "derniere_mensualite",
           "total_interets",
-          "total_du",
+          "total_assurance",
+          "total_frais",
+          "total_verse",
+          "cout_credit",
           "taeg"
         ],
         "properties": {
-          "echeances": { "type": "integer", "example": 240 },
-          "premiere_echeance": {
-            "type": "number",
-            "description": "Sous annuite_constante, toutes les echeances sauf la derniere valent ce montant.",
-            "example": 1443.48
+          "echeances": {
+            "type": "integer",
+            "example": 240
           },
-          "derniere_echeance": {
+          "premiere_mensualite": {
+            "type": "number",
+            "description": "Sous annuite_constante et sans assurance sur le capital restant du, toutes les mensualites sauf la derniere valent ce montant.",
+            "example": 1518.48
+          },
+          "derniere_mensualite": {
             "type": "number",
             "description": "Absorbe le residu d'arrondi accumule sur les periodes precedentes.",
-            "example": 1444.93
+            "example": 1445.36
           },
-          "total_interets": { "type": "number", "example": 96436.65 },
-          "total_du": { "type": "number", "example": 346436.65 },
+          "total_interets": {
+            "type": "number",
+            "example": 96436.65
+          },
+          "total_assurance": {
+            "type": "number",
+            "example": 10062.93
+          },
+          "total_frais": {
+            "type": "number",
+            "description": "Somme des frais de dossier et de garantie, verses au depart.",
+            "example": 2400.0
+          },
+          "total_verse": {
+            "type": "number",
+            "description": "Somme des mensualites, frais initiaux exclus.",
+            "example": 356499.58
+          },
+          "cout_credit": {
+            "type": "number",
+            "description": "Interets, assurance et frais reunis.",
+            "example": 108899.58
+          },
           "taeg": {
             "type": "number",
             "description": "Taux annuel effectif global en pourcent, a quatre decimales, resolu par dichotomie sur les flux reels.",
-            "example": 3.5051
+            "example": 3.9926
           }
         }
       },
       "Echeance": {
         "type": "object",
-        "required": ["n", "paiement", "interets", "capital", "solde"],
+        "required": [
+          "n",
+          "echeance",
+          "interets",
+          "capital",
+          "assurance",
+          "mensualite",
+          "solde"
+        ],
         "properties": {
-          "n": { "type": "integer", "minimum": 1, "example": 1 },
-          "paiement": { "type": "number", "example": 1443.48 },
-          "interets": { "type": "number", "example": 718.75 },
-          "capital": { "type": "number", "example": 724.73 },
+          "n": {
+            "type": "integer",
+            "minimum": 1,
+            "example": 1
+          },
+          "echeance": {
+            "type": "number",
+            "description": "Part de credit : capital + interets.",
+            "example": 1443.48
+          },
+          "interets": {
+            "type": "number",
+            "example": 718.75
+          },
+          "capital": {
+            "type": "number",
+            "example": 724.73
+          },
+          "assurance": {
+            "type": "number",
+            "example": 75.0
+          },
+          "mensualite": {
+            "type": "number",
+            "description": "Ce que l'emprunteur verse : echeance + assurance.",
+            "example": 1518.48
+          },
           "solde": {
             "type": "number",
             "description": "Capital restant du apres cette echeance. Nul apres la derniere.",
@@ -254,14 +504,28 @@
       },
       "Reponse": {
         "type": "object",
-        "required": ["status", "demande", "recapitulatif", "echeancier"],
+        "required": [
+          "status",
+          "demande",
+          "recapitulatif",
+          "echeancier"
+        ],
         "properties": {
-          "status": { "type": "string", "const": "success" },
-          "demande": { "$ref": "#/components/schemas/Demande" },
-          "recapitulatif": { "$ref": "#/components/schemas/Recapitulatif" },
+          "status": {
+            "type": "string",
+            "const": "success"
+          },
+          "demande": {
+            "$ref": "#/components/schemas/Demande"
+          },
+          "recapitulatif": {
+            "$ref": "#/components/schemas/Recapitulatif"
+          },
           "echeancier": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/Echeance" }
+            "items": {
+              "$ref": "#/components/schemas/Echeance"
+            }
           }
         }
       }

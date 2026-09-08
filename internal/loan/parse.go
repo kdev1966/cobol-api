@@ -65,6 +65,31 @@ var codesMethode = map[string]byte{
 	"I":                 'I',
 }
 
+// AssietteParDefaut : sans assurance declaree, il n'y en a pas.
+const AssietteParDefaut = "aucune"
+
+// codesAssiette associe chaque libelle d'assiette a la lettre attendue par le
+// programme COBOL.
+var codesAssiette = map[string]byte{
+	"aucune":             'N',
+	"capital_initial":    'I',
+	"capital_restant_du": 'R',
+	"N":                  'N',
+	"I":                  'I',
+	"R":                  'R',
+}
+
+var libellesAssiette = map[byte]string{
+	'N': "aucune",
+	'I': "capital_initial",
+	'R': "capital_restant_du",
+}
+
+// AssiettesAcceptees liste les libelles canoniques.
+func AssiettesAcceptees() []string {
+	return []string{"aucune", "capital_initial", "capital_restant_du"}
+}
+
 // libellesMethode rend la forme canonique renvoyee dans la reponse.
 var libellesMethode = map[byte]string{
 	'A': "annuite_constante",
@@ -81,7 +106,35 @@ func MethodesAcceptees() []string {
 // ParseDemande valide les parametres et rend une demande prete a calculer.
 // Les bornes protegent a la fois les PIC du programme COBOL et la taille de
 // la reponse.
-func ParseDemande(capital, taux, mois, methode string) (Demande, error) {
+// Parametres regroupe la saisie brute, telle qu'elle arrive de la requete.
+type Parametres struct {
+	Capital       string
+	Taux          string
+	Mois          string
+	Methode       string
+	FraisDossier  string
+	FraisGarantie string
+	TauxAssurance string
+	Assiette      string
+}
+
+// montantOuZero convertit un montant facultatif : vide vaut zero.
+func montantOuZero(champ, texte string, max int64) (int64, error) {
+	if strings.TrimSpace(texte) == "" {
+		return 0, nil
+	}
+	valeur, err := decimalVersEntier(texte, 2)
+	if err != nil {
+		return 0, &ErreurValidation{champ, err.Error()}
+	}
+	if valeur > max {
+		return 0, &ErreurValidation{champ, "montant trop grand"}
+	}
+	return valeur, nil
+}
+
+func ParseDemande(p Parametres) (Demande, error) {
+	capital, taux, mois, methode := p.Capital, p.Taux, p.Mois, p.Methode
 	centimes, err := decimalVersEntier(capital, 2)
 	if err != nil {
 		return Demande{}, &ErreurValidation{"capital", err.Error()}
@@ -119,14 +172,65 @@ func ParseDemande(capital, taux, mois, methode string) (Demande, error) {
 			"doit valoir " + strings.Join(MethodesAcceptees(), ", ")}
 	}
 
+	fraisDossier, err := montantOuZero("frais_dossier", p.FraisDossier, FraisMax)
+	if err != nil {
+		return Demande{}, err
+	}
+	fraisGarantie, err := montantOuZero("frais_garantie", p.FraisGarantie, FraisMax)
+	if err != nil {
+		return Demande{}, err
+	}
+	// Les frais sont preleves sur ce que l'emprunteur percoit : ils ne
+	// peuvent pas absorber le capital.
+	if fraisDossier+fraisGarantie >= centimes {
+		return Demande{}, &ErreurValidation{"frais_dossier",
+			"les frais ne peuvent pas atteindre le capital emprunte"}
+	}
+
+	var tauxAssurance int64
+	if brut := strings.TrimSpace(p.TauxAssurance); brut != "" {
+		tauxAssurance, err = decimalVersEntier(brut, 6)
+		if err != nil {
+			return Demande{}, &ErreurValidation{"taux_assurance", err.Error()}
+		}
+		if tauxAssurance > TauxMax {
+			return Demande{}, &ErreurValidation{"taux_assurance",
+				"doit etre compris entre 0 et 99.999999"}
+		}
+	}
+
+	assiette := strings.TrimSpace(p.Assiette)
+	if assiette == "" {
+		// Un taux d'assurance sans assiette porte sur le capital initial,
+		// convention la plus repandue ; sans taux, il n'y a pas d'assurance.
+		if tauxAssurance > 0 {
+			assiette = "capital_initial"
+		} else {
+			assiette = AssietteParDefaut
+		}
+	}
+	codeAssiette, connue := codesAssiette[assiette]
+	if !connue {
+		return Demande{}, &ErreurValidation{"assiette_assurance",
+			"doit valoir " + strings.Join(AssiettesAcceptees(), ", ")}
+	}
+
 	return Demande{
-		CapitalCentimes:  centimes,
-		TauxMillioniemes: millioniemes,
-		CodeMethode:      code,
-		Mois:             n,
-		Capital:          formaterEchelle(centimes, 2),
-		Taux:             formaterEchelle(millioniemes, 6),
-		Methode:          libellesMethode[code],
+		CapitalCentimes:       centimes,
+		TauxMillioniemes:      millioniemes,
+		CodeMethode:           code,
+		CodeAssiette:          codeAssiette,
+		FraisDossierCentimes:  fraisDossier,
+		FraisGarantieCentimes: fraisGarantie,
+		TauxAssuranceMillion:  tauxAssurance,
+		Mois:                  n,
+		Capital:               formaterEchelle(centimes, 2),
+		Taux:                  formaterEchelle(millioniemes, 6),
+		Methode:               libellesMethode[code],
+		FraisDossier:          formaterEchelle(fraisDossier, 2),
+		FraisGarantie:         formaterEchelle(fraisGarantie, 2),
+		TauxAssurance:         formaterEchelle(tauxAssurance, 6),
+		AssietteAssur:         libellesAssiette[codeAssiette],
 	}, nil
 }
 

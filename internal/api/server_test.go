@@ -175,13 +175,17 @@ func TestEcheancierNominal(t *testing.T) {
 			Methode string `json:"methode"`
 		} `json:"demande"`
 		Recapitulatif struct {
-			Echeances        int         `json:"echeances"`
-			PremiereEcheance json.Number `json:"premiere_echeance"`
-			DerniereEcheance json.Number `json:"derniere_echeance"`
+			Echeances          int         `json:"echeances"`
+			PremiereMensualite json.Number `json:"premiere_mensualite"`
+			DerniereMensualite json.Number `json:"derniere_mensualite"`
+			TotalAssurance     json.Number `json:"total_assurance"`
+			TotalFrais         json.Number `json:"total_frais"`
+			Taeg               json.Number `json:"taeg"`
 		} `json:"recapitulatif"`
 		Echeancier []struct {
-			N        int         `json:"n"`
-			Paiement json.Number `json:"paiement"`
+			N          int         `json:"n"`
+			Mensualite json.Number `json:"mensualite"`
+			Assurance  json.Number `json:"assurance"`
 		} `json:"echeancier"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &corps); err != nil {
@@ -201,14 +205,14 @@ func TestEcheancierNominal(t *testing.T) {
 		t.Errorf("methode par defaut %q", corps.Demande.Methode)
 	}
 	// Le montant doit ressortir tel que le COBOL l'a ecrit.
-	if got := corps.Recapitulatif.PremiereEcheance.String(); got != "1443.48" {
-		t.Errorf("premiere echeance %q, attendu \"1443.48\"", got)
+	if got := corps.Recapitulatif.PremiereMensualite.String(); got != "1443.48" {
+		t.Errorf("premiere mensualite %q, attendu \"1443.48\"", got)
 	}
-	if got := corps.Recapitulatif.DerniereEcheance.String(); got != "1444.93" {
-		t.Errorf("derniere echeance %q, attendu \"1444.93\"", got)
+	if got := corps.Recapitulatif.DerniereMensualite.String(); got != "1444.93" {
+		t.Errorf("derniere mensualite %q, attendu \"1444.93\"", got)
 	}
-	if got := corps.Echeancier[239].Paiement.String(); got != "1444.93" {
-		t.Errorf("derniere echeance %q, attendu \"1444.93\"", got)
+	if got := corps.Echeancier[239].Mensualite.String(); got != "1444.93" {
+		t.Errorf("derniere mensualite %q, attendu \"1444.93\"", got)
 	}
 }
 

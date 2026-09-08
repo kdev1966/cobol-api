@@ -13,12 +13,12 @@ import (
 // jamais une panique.
 func FuzzLireSortie(f *testing.F) {
 	f.Add("")
-	f.Add("R02400000000144348000000014449300000000964366500000003464366503505 1")
+	f.Add("R024000000001443480000000144493000000009643665")
 	f.Add(recap(1, "0000000010000", "0000000010000", "000000000000500", "000000000010500") +
 		"\n" + echeance(1, "0000000010500", "0000000000500", "0000000010000", "0000000000000"))
 	f.Add("libcob: warning: quelque chose\nR\nE\n")
 	f.Add("RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR")
-	f.Add("E000100000001443480000000071875000000007247300000249275270000")
+	f.Add("E00010000000144348000000007187500000000724730000000000000")
 	// Des chiffres a la bonne longueur mais tronques en plein champ.
 	f.Add("R024000000001443480000000144493")
 
@@ -34,10 +34,12 @@ func FuzzLireSortie(f *testing.F) {
 			}
 			for _, e := range res.Echeancier {
 				for nom, v := range map[string]string{
-					"paiement": e.Paiement.String(),
-					"interets": e.Interets.String(),
-					"capital":  e.Capital.String(),
-					"solde":    e.Solde.String(),
+					"echeance":   e.Echeance.String(),
+					"interets":   e.Interets.String(),
+					"capital":    e.Capital.String(),
+					"assurance":  e.Assurance.String(),
+					"mensualite": e.Mensualite.String(),
+					"solde":      e.Solde.String(),
 				} {
 					if _, err := decimalVersEntier(v, 2); err != nil {
 						t.Fatalf("%s illisible en sortie : %q", nom, v)

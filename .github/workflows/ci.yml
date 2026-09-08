@@ -34,7 +34,7 @@ jobs:
       # le nombre de lignes sont un contrat.
       - name: Test de fumee du binaire COBOL
         run: |
-          echo "0000025000000034500000240A" | ./bin/loan_amortization > fumee.txt
+          echo "0000025000000034500000240000000000000000000000000000000AN" | ./bin/loan_amortization > fumee.txt
           grep -q '^R02400000000144348' fumee.txt
           test "$(wc -l < fumee.txt)" -eq 241
 
@@ -110,10 +110,10 @@ jobs:
         run: |
           reponse=$(curl -sf -H 'X-API-Key: cle-de-ci' \
             'http://localhost:3000/v1/loans/schedule?capital=250000.00&taux=3.45&mois=240')
-          echo "$reponse" | grep -q '"premiere_echeance":1443.48'
-          echo "$reponse" | grep -q '"derniere_echeance":1444.93'
+          echo "$reponse" | grep -q '"premiere_mensualite":1443.48'
+          echo "$reponse" | grep -q '"derniere_mensualite":1444.93'
           echo "$reponse" | grep -q '"total_interets":96436.65'
-          echo "$reponse" | grep -q '"n":240,"paiement":1444.93'
+          echo "$reponse" | grep -q '"n":240,"echeance":1444.93'
           echo "$reponse" | grep -q '"methode":"annuite_constante"'
 
       # Les deux autres methodes doivent repondre et se distinguer.
@@ -126,12 +126,35 @@ jobs:
           in_fine=$(curl -sf -H 'X-API-Key: cle-de-ci' \
             'http://localhost:3000/v1/loans/schedule?capital=120000.00&taux=4.2&mois=60&methode=in_fine')
           echo "$in_fine" | grep -q '"total_interets":25200.00'
-          echo "$in_fine" | grep -q '"n":60,"paiement":120420.00'
+          echo "$in_fine" | grep -q '"n":60,"echeance":120420.00'
 
       - name: Verifier le refus d'une methode inconnue
         run: |
           code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
             'http://localhost:3000/v1/loans/schedule?capital=1000&taux=3&mois=12&methode=lineaire')
+          test "$code" = "400"
+
+      # Les frais et l'assurance changent les flux : le TAEG doit bouger, et
+      # ces valeurs sont recoupees avec une dichotomie independante en Python.
+      - name: Verifier les frais et l'assurance
+        run: |
+          base='http://localhost:3000/v1/loans/schedule?capital=250000.00&taux=3.45&mois=240'
+
+          nu=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base")
+          echo "$nu" | grep -q '"taeg":3.5051'
+          echo "$nu" | grep -q '"total_assurance":0.00'
+
+          frais=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base&frais_dossier=1500.00")
+          echo "$frais" | grep -q '"taeg":3.5752'
+          echo "$frais" | grep -q '"total_frais":1500.00'
+
+          assur=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base&taux_assurance=0.36&assiette_assurance=capital_initial")
+          echo "$assur" | grep -q '"taeg":4.1020'
+          echo "$assur" | grep -q '"total_assurance":18000.00'
+          echo "$assur" | grep -q '"assurance":75.00'
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            "$base&frais_dossier=999999999.99")
           test "$code" = "400"
 
       - name: Verifier la specification OpenAPI
