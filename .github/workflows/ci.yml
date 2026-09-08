@@ -74,9 +74,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
+      # Le linter est compile avec la chaine du module plutot qu'installe en
+      # binaire : l'action officielle posait un golangci-lint bati avec Go
+      # 1.24, qui refuse d'analyser un module ciblant 1.26.6. Le compiler ici
+      # rend ce decalage impossible. La version est figee pour qu'une
+      # publication amont ne casse pas la CI un jour sans rapport.
+      - name: golangci-lint
+        run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run ./...
 
   image:
     name: Image et service
