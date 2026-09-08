@@ -28,7 +28,7 @@
       *> Sortie : enregistrements a largeur fixe, un par ligne.
       *>          "R" recapitulatif : echeances 9(4), premiere echeance
       *>              9(11)V99, derniere echeance 9(11)V99, total interets
-      *>              9(13)V99, total du 9(13)V99                  -> 61 car.
+      *>              9(13)V99, total du 9(13)V99, taeg 9(2)V9(4)  -> 67 car.
       *>          "E" echeance      : numero 9(4), paiement 9(11)V99,
       *>              interets, capital, solde, tous 9(11)V99      -> 57 car.
       *>          Le recapitulatif precede les echeances, dans l'ordre.
@@ -40,6 +40,12 @@
       *>          l'appelant.
       *> Retour : 0 succes, 2 entree malformee, 3 parametres hors bornes,
       *>          4 methode inconnue.
+      *>
+      *> Le TAEG est le taux actuariel annuel qui egalise la valeur actuelle
+      *> des echeances au capital emprunte. Comme les echeances sont arrondies
+      *> au centime, il ne se deduit pas du taux nominal : il faut le
+      *> resoudre. C'est fait par dichotomie sur le taux periodique, en
+      *> arithmetique decimale exacte.
 
        ENVIRONMENT DIVISION.
 
@@ -75,6 +81,23 @@
        01 WS-CUM-INTERET        PIC 9(13)V99   VALUE 0.
        01 WS-CUM-ECHEANCE       PIC 9(13)V99   VALUE 0.
 
+      *> Duree maximale acceptee, qui dimensionne la table des paiements
+      *> conservee pour la resolution du TAEG.
+       78 DUREE-MAX             VALUE 600.
+       78 ITERATIONS-TAEG       VALUE 40.
+
+       01 WS-PAIEMENTS.
+          05 WS-PAIEMENT        PIC 9(11)V99 OCCURS 600 TIMES.
+
+       01 WS-J                  PIC 9(4)       VALUE 0.
+       01 WS-ITER               PIC 9(3)       VALUE 0.
+       01 WS-TAUX-BAS           PIC 9V9(18)    VALUE 0.
+       01 WS-TAUX-HAUT          PIC 9V9(18)    VALUE 0.
+       01 WS-TAUX-ESSAI         PIC 9V9(18)    VALUE 0.
+       01 WS-ESCOMPTE           PIC 9V9(18)    VALUE 0.
+       01 WS-VALEUR-ACTUELLE    PIC 9(13)V9(6) VALUE 0.
+       01 WS-TAEG               PIC 9(2)V9(4)  VALUE 0.
+
       *> Le deroulement sert deux fois : une passe muette pour totaliser,
       *> une passe emettrice. Un seul corps de boucle, donc une seule
       *> regle de calcul.
@@ -90,6 +113,7 @@
           05 WS-R-DERNIERE      PIC 9(11)V99   VALUE 0.
           05 WS-R-INTERETS      PIC 9(13)V99   VALUE 0.
           05 WS-R-TOTAL         PIC 9(13)V99   VALUE 0.
+          05 WS-R-TAEG          PIC 9(2)V9(4)  VALUE 0.
 
        01 WS-LIGNE.
           05 FILLER             PIC X          VALUE "E".
@@ -107,6 +131,7 @@
 
            MOVE "N" TO WS-EMETTRE
            PERFORM DEROULER-ECHEANCIER
+           PERFORM CALCULER-TAEG
            PERFORM ECRIRE-RECAPITULATIF
 
            MOVE "O" TO WS-EMETTRE
@@ -134,6 +159,13 @@
 
            IF WS-E-CAPITAL = 0 OR WS-E-DUREE = 0
                DISPLAY "capital et duree doivent etre non nuls"
+                   UPON SYSERR
+               MOVE 3 TO RETURN-CODE
+               STOP RUN
+           END-IF
+
+           IF WS-E-DUREE > DUREE-MAX
+               DISPLAY "duree superieure a " DUREE-MAX " mois"
                    UPON SYSERR
                MOVE 3 TO RETURN-CODE
                STOP RUN
@@ -202,6 +234,8 @@
                ADD WS-INTERET  TO WS-CUM-INTERET
                ADD WS-ECHEANCE TO WS-CUM-ECHEANCE
 
+               MOVE WS-ECHEANCE TO WS-PAIEMENT(WS-I)
+
                IF WS-I = 1
                    MOVE WS-ECHEANCE TO WS-PREMIERE
                END-IF
@@ -215,12 +249,52 @@
 
            END-PERFORM.
 
+      *> Dichotomie sur le taux periodique : la valeur actuelle des
+      *> echeances decroit quand le taux monte, l'encadrement se resserre
+      *> donc de moitie a chaque tour.
+      *>
+      *> Les echeances etant construites a partir du taux nominal, le taux
+      *> recherche en est tres proche ; 0,25 par mois le majore largement,
+      *> le taux annuel accepte plafonnant a 99,999999 %, soit 0,0833 par
+      *> mois. Quarante tours ramenent alors l'incertitude a 2,3e-13, bien
+      *> au-dela des quatre decimales rendues.
+       CALCULER-TAEG.
+           MOVE 0 TO WS-TAUX-BAS
+           MOVE 0.25 TO WS-TAUX-HAUT
+
+           PERFORM VARYING WS-ITER FROM 1 BY 1
+               UNTIL WS-ITER > ITERATIONS-TAEG
+               COMPUTE WS-TAUX-ESSAI =
+                   (WS-TAUX-BAS + WS-TAUX-HAUT) / 2
+               PERFORM VALEUR-ACTUELLE-DES-ECHEANCES
+               IF WS-VALEUR-ACTUELLE > WS-E-CAPITAL
+                   MOVE WS-TAUX-ESSAI TO WS-TAUX-BAS
+               ELSE
+                   MOVE WS-TAUX-ESSAI TO WS-TAUX-HAUT
+               END-IF
+           END-PERFORM
+
+      *> Le taux periodique resolu est ramene a l'annee par capitalisation.
+           COMPUTE WS-TAEG ROUNDED =
+               ((1 + WS-TAUX-ESSAI) ** 12 - 1) * 100.
+
+       VALEUR-ACTUELLE-DES-ECHEANCES.
+           MOVE 0 TO WS-VALEUR-ACTUELLE
+           MOVE 1 TO WS-ESCOMPTE
+
+           PERFORM VARYING WS-J FROM 1 BY 1 UNTIL WS-J > WS-E-DUREE
+               COMPUTE WS-ESCOMPTE = WS-ESCOMPTE / (1 + WS-TAUX-ESSAI)
+               COMPUTE WS-VALEUR-ACTUELLE = WS-VALEUR-ACTUELLE
+                   + WS-PAIEMENT(WS-J) * WS-ESCOMPTE
+           END-PERFORM.
+
        ECRIRE-RECAPITULATIF.
            MOVE WS-E-DUREE      TO WS-R-ECHEANCES
            MOVE WS-PREMIERE     TO WS-R-PREMIERE
            MOVE WS-DERNIERE     TO WS-R-DERNIERE
            MOVE WS-CUM-INTERET  TO WS-R-INTERETS
            MOVE WS-CUM-ECHEANCE TO WS-R-TOTAL
+           MOVE WS-TAEG         TO WS-R-TAEG
 
            DISPLAY WS-RECAP.
 

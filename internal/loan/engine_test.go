@@ -30,8 +30,8 @@ func binaire(t *testing.T) string {
 // recap et echeance fabriquent les enregistrements a largeur fixe attendus,
 // aux memes positions que celles produites par le programme COBOL.
 func recap(echeances int, premiere, derniere, interets, total string) string {
-	return fmt.Sprintf("R%04d%013s%013s%015s%015s",
-		echeances, premiere, derniere, interets, total)
+	return fmt.Sprintf("R%04d%013s%013s%015s%015s%06d",
+		echeances, premiere, derniere, interets, total, 35051)
 }
 
 func echeance(n int, paiement, interets, capital, solde string) string {
@@ -116,27 +116,36 @@ func TestLesMontantsNeTransitentPasParUnFlottant(t *testing.T) {
 	}
 }
 
-func TestMontantInsereLePointDecimal(t *testing.T) {
-	cas := []struct{ chiffres, attendu string }{
-		{"0000000144348", "1443.48"},
-		{"0000000000007", "0.07"},
-		{"0000000000000", "0.00"},
-		{"9999999999999", "99999999999.99"},
-		{"000", "0.00"},
+func TestNombreInsereLePointDecimal(t *testing.T) {
+	cas := []struct {
+		chiffres  string
+		decimales int
+		attendu   string
+	}{
+		{"0000000144348", 2, "1443.48"},
+		{"0000000000007", 2, "0.07"},
+		{"0000000000000", 2, "0.00"},
+		{"9999999999999", 2, "99999999999.99"},
+		{"000", 2, "0.00"},
+		// Le TAEG est rendu a quatre decimales.
+		{"035051", 4, "3.5051"},
+		{"000000", 4, "0.0000"},
+		{"999999", 4, "99.9999"},
 	}
 	for _, c := range cas {
-		got, err := montant(c.chiffres)
+		got, err := nombre(c.chiffres, c.decimales)
 		if err != nil {
-			t.Errorf("montant(%q) : %v", c.chiffres, err)
+			t.Errorf("nombre(%q, %d) : %v", c.chiffres, c.decimales, err)
 			continue
 		}
 		if got.String() != c.attendu {
-			t.Errorf("montant(%q) = %q, attendu %q", c.chiffres, got, c.attendu)
+			t.Errorf("nombre(%q, %d) = %q, attendu %q",
+				c.chiffres, c.decimales, got, c.attendu)
 		}
 	}
 	for _, mauvais := range []string{"", "12", "12x45", "  1234"} {
-		if _, err := montant(mauvais); err == nil {
-			t.Errorf("montant(%q) aurait du echouer", mauvais)
+		if _, err := nombre(mauvais, 2); err == nil {
+			t.Errorf("nombre(%q, 2) aurait du echouer", mauvais)
 		}
 	}
 }
@@ -322,10 +331,14 @@ func TestCasDeReference(t *testing.T) {
 		"total_interets": res.Recapitulatif.TotalInterets.String(),
 		"total_du":       res.Recapitulatif.TotalDu.String(),
 	}
+	attendus["taeg"] = res.Recapitulatif.Taeg.String()
 	references := map[string]string{
 		"mensualite":     "1443.48",
 		"total_interets": "96436.65",
 		"total_du":       "346436.65",
+		// Dichotomie independante en Decimal Python sur les memes echeances :
+		// 3.505078595213301... soit 3.5051 a quatre decimales.
+		"taeg": "3.5051",
 	}
 	for cle, ref := range references {
 		if attendus[cle] != ref {
@@ -343,6 +356,54 @@ func TestCasDeReference(t *testing.T) {
 	derniere := res.Echeancier[len(res.Echeancier)-1]
 	if derniere.Paiement.String() != "1444.93" {
 		t.Errorf("derniere echeance %s, attendu 1444.93", derniere.Paiement)
+	}
+}
+
+// Sans frais, le TAEG ne depend que du taux nominal : il capitalise le taux
+// periodique sur douze mois, quelle que soit la maniere dont le capital est
+// amorti. C'est une propriete du domaine, verifiee ici comme telle.
+func TestLeTaegNeDependPasDeLaMethode(t *testing.T) {
+	moteur := NewMoteur(binaire(t))
+
+	var reference string
+	for _, methode := range MethodesAcceptees() {
+		d, err := ParseDemande("120000.00", "4.2", "60", methode)
+		if err != nil {
+			t.Fatalf("ParseDemande : %v", err)
+		}
+		res, err := moteur.Calculer(context.Background(), d)
+		if err != nil {
+			t.Fatalf("Calculer : %v", err)
+		}
+
+		got := res.Recapitulatif.Taeg.String()
+		if reference == "" {
+			reference = got
+			// (1 + 0.042/12)^12 - 1 = 4.2818 %
+			if got != "4.2818" {
+				t.Errorf("taeg %s, attendu 4.2818", got)
+			}
+			continue
+		}
+		if got != reference {
+			t.Errorf("methode %s : taeg %s, attendu %s", methode, got, reference)
+		}
+	}
+}
+
+func TestLeTaegEstNulSansInterets(t *testing.T) {
+	moteur := NewMoteur(binaire(t))
+
+	d, err := ParseDemande("10000.00", "0", "12", "")
+	if err != nil {
+		t.Fatalf("ParseDemande : %v", err)
+	}
+	res, err := moteur.Calculer(context.Background(), d)
+	if err != nil {
+		t.Fatalf("Calculer : %v", err)
+	}
+	if got := res.Recapitulatif.Taeg.String(); got != "0.0000" {
+		t.Errorf("taeg %s, attendu 0.0000", got)
 	}
 }
 

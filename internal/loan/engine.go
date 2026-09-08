@@ -48,7 +48,7 @@ type Demande struct {
 const (
 	tagRecap     = 'R'
 	tagEcheance  = 'E'
-	longRecap    = 61
+	longRecap    = 67
 	longEcheance = 57
 )
 
@@ -67,6 +67,10 @@ type Recapitulatif struct {
 	DerniereEcheance json.Number `json:"derniere_echeance"`
 	TotalInterets    json.Number `json:"total_interets"`
 	TotalDu          json.Number `json:"total_du"`
+	// Taeg est le taux actuariel annuel qui egalise la valeur actuelle des
+	// echeances au capital emprunte, resolu par le programme COBOL sur les
+	// echeances reellement arrondies.
+	Taeg json.Number `json:"taeg"`
 }
 
 // Echeance est une ligne de l'echeancier.
@@ -124,23 +128,29 @@ func (m *Moteur) Calculer(ctx context.Context, d Demande) (*Echeancier, error) {
 	return lireSortie(&sortie)
 }
 
-// montant insere le point decimal dans une suite de chiffres. Le texte du
+// nombre insere le point decimal dans une suite de chiffres. Le texte du
 // COBOL devient le texte du JSON : aucun flottant n'intervient.
-func montant(chiffres string) (json.Number, error) {
-	if len(chiffres) < 3 {
-		return "", fmt.Errorf("montant trop court : %q", chiffres)
+func nombre(chiffres string, decimales int) (json.Number, error) {
+	if len(chiffres) <= decimales {
+		return "", fmt.Errorf("valeur trop courte : %q", chiffres)
 	}
 	for _, r := range chiffres {
 		if r < '0' || r > '9' {
-			return "", fmt.Errorf("montant non numerique : %q", chiffres)
+			return "", fmt.Errorf("valeur non numerique : %q", chiffres)
 		}
 	}
 
-	entiere := strings.TrimLeft(chiffres[:len(chiffres)-2], "0")
+	coupe := len(chiffres) - decimales
+	entiere := strings.TrimLeft(chiffres[:coupe], "0")
 	if entiere == "" {
 		entiere = "0"
 	}
-	return json.Number(entiere + "." + chiffres[len(chiffres)-2:]), nil
+	return json.Number(entiere + "." + chiffres[coupe:]), nil
+}
+
+// montant traite les champs monetaires, tous a deux decimales.
+func montant(chiffres string) (json.Number, error) {
+	return nombre(chiffres, 2)
 }
 
 func entier(chiffres string) (int, error) {
@@ -213,6 +223,10 @@ func lireRecapitulatif(ligne string, r *Recapitulatif) error {
 		return fmt.Errorf("recapitulatif illisible : %w", err)
 	}
 	if r.TotalDu, err = montant(ligne[46:61]); err != nil {
+		return fmt.Errorf("recapitulatif illisible : %w", err)
+	}
+	// Le TAEG est un pourcentage a quatre decimales, pas un montant.
+	if r.Taeg, err = nombre(ligne[61:67], 4); err != nil {
 		return fmt.Errorf("recapitulatif illisible : %w", err)
 	}
 	return nil

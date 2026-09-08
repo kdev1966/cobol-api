@@ -34,7 +34,8 @@ curl -s -H "X-API-Key: $K" \
     "premiere_echeance": 1443.48,
     "derniere_echeance": 1444.93,
     "total_interets": 96436.65,
-    "total_du": 346436.65
+    "total_du": 346436.65,
+    "taeg": 3.5051
   },
   "echeancier": [
     { "n": 1, "paiement": 1443.48, "interets": 718.75, "capital": 724.73, "solde": 249275.27 },
@@ -63,6 +64,27 @@ entière.
 Sous `annuite_constante`, toutes les échéances sauf la dernière valent
 `premiere_echeance`. Sous les deux autres méthodes, l'échéance varie à chaque
 période ; le récapitulatif rend donc la première et la dernière.
+
+## Le TAEG
+
+Le TAEG rendu est le taux actuariel annuel qui égalise la valeur actuelle des
+échéances au capital emprunté. Il **n'est pas déduit** du taux nominal : comme
+les échéances sont arrondies au centime, il faut le résoudre. Le programme
+COBOL le fait par dichotomie sur le taux périodique, en arithmétique décimale
+exacte, puis capitalise sur douze mois.
+
+Sur le cas de référence, la dichotomie converge vers 3,505078595 %, soit
+**3,5051 %** à quatre décimales — valeur recoupée avec une résolution
+indépendante en `Decimal` Python sur les mêmes échéances.
+
+En l'absence de frais, le TAEG ne dépend que du taux nominal : il vaut la même
+chose pour les trois méthodes d'amortissement. La suite de tests le vérifie
+comme une propriété du domaine.
+
+Ce calcul a un coût : sur un échéancier de 240 mois, la requête passe de
+7,3 ms à **19,5 ms**. C'est le prix d'une résolution honnête, qui restera juste
+le jour où des frais de dossier ou une assurance entreront dans les flux — là
+où une formule fermée deviendrait fausse.
 
 ## Les invariants
 
@@ -121,18 +143,19 @@ standard **une ligne de 26 caractères** — capital `9(11)V99`, taux annuel
 
 ```
 R + échéances 9(4) + première et dernière échéance 9(11)V99
-                   + total intérêts et total dû 9(13)V99                      61 car.
+                   + total intérêts et total dû 9(13)V99
+                   + TAEG 9(2)V9(4)                                           67 car.
 E + numéro    9(4) + paiement, intérêts, capital, solde 9(11)V99              57 car.
 ```
 
 ```sh
 $ echo "0000025000000034500000240A" | ./bin/loan_amortization | head -2
-R024000000001443480000000144493000000009643665000000034643665
+R024000000001443480000000144493000000009643665000000034643665035051
 E00010000000144348000000007187500000000724730000024927527
 ```
 
 Codes de sortie : `2` si l'entrée est malformée, `3` si le capital ou la durée
-sont nuls, `4` si la méthode est inconnue.
+sont nuls ou la durée supérieure à 600 mois, `4` si la méthode est inconnue.
 
 **`JSON GENERATE` n'est délibérément pas utilisé.** Le paquet GnuCOBOL des
 distributions est construit avec `JSON library: not found` : l'instruction
@@ -183,6 +206,4 @@ privilégié et n'écrit rien sur disque.
 - Les échéances sont mensuelles. Aucune autre périodicité n'est proposée.
 - Le taux périodique est **proportionnel** (taux nominal annuel divisé par
   douze), et non le taux actuariel équivalent. C'est un choix, pas un oubli.
-- Le TAEG n'est pas calculé : il demande une résolution itérative de taux de
-  rendement interne.
 - Ni assurance, ni frais de dossier, ni échéances irrégulières.
