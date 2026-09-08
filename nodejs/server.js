@@ -192,6 +192,31 @@ app.get("/history", limiter, requireApiKey, async (req, res) => {
   }
 });
 
+// Index du service : ouvrir la racine dans un navigateur ne doit pas rendre une
+// erreur. Ouvert, comme /health, et sans secret : ces chemins sont documentes.
+app.get("/", (req, res) => {
+  res.json({
+    service: "cobol-api",
+    description: "Generateur de codes promotionnels COBOL expose en REST",
+    authentication: "En-tete X-API-Key sur les endpoints marques auth",
+    endpoints: [
+      {
+        method: "GET",
+        path: "/promocodes?count=N",
+        auth: true,
+        description: `Genere N codes (1-${MAX_CODES}, defaut 5) et les enregistre`,
+      },
+      {
+        method: "GET",
+        path: "/history?limit=N",
+        auth: true,
+        description: `Derniers codes enregistres (1-${MAX_HISTORY}, defaut 10)`,
+      },
+      { method: "GET", path: "/health", auth: false, description: "Etat du service" },
+    ],
+  });
+});
+
 // Route de health check. Elle interroge réellement la base : le HEALTHCHECK du
 // conteneur s'appuie dessus, une réponse inconditionnelle ne servirait à rien.
 app.get("/health", (req, res) => {

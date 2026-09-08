@@ -35,6 +35,7 @@ curl -H "X-API-Key: $API_KEY" 'http://localhost:3000/promocodes?count=5'
 
 | Méthode | Chemin | Clé requise | Description |
 |---|---|---|---|
+| `GET` | `/` | non | Index du service et liste des endpoints |
 | `GET` | `/promocodes?count=N` | oui | Génère N codes (1-100, défaut 5) et les enregistre |
 | `GET` | `/history?limit=N` | oui | Rend les N derniers codes (1-100, défaut 10) |
 | `GET` | `/health` | non | État du service ; `503` si la base ou le binaire manquent |
