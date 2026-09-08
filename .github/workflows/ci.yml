@@ -235,12 +235,38 @@ jobs:
             test "$code" = "400"
           done
 
+      # Chaque echeancier produit doit laisser une trace, sans jamais stocker
+      # la cle d'API.
+      - name: Verifier la piste d'audit
+        run: |
+          reponse=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/schedule?capital=60000.000&taux=13&mois=60&categorie=credits_consommation&taux_assurance=1.5&assiette_assurance=capital_initial')
+          echo "$reponse" | grep -q '"simulation_id":'
+
+          audit=$(curl -sf -H 'X-API-Key: cle-de-ci' 'http://localhost:3000/v1/simulations?limite=50')
+          echo "$audit" | grep -q '"teg":"15.41"'
+          echo "$audit" | grep -q '"arrete":"Arrete du 28 juillet 2026"'
+          # La cle ne doit jamais apparaitre, ni en clair ni en fragment.
+          if echo "$audit" | grep -q 'cle-de-ci'; then
+            echo "la cle d'API figure dans la piste d'audit" >&2
+            exit 1
+          fi
+
+          excessifs=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/simulations?non_conformes=true')
+          echo "$excessifs" | grep -q '"conforme":false'
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/simulations?limite=999')
+          test "$code" = "400"
+
       - name: Verifier la specification OpenAPI
         run: |
           spec=$(curl -sf http://localhost:3000/openapi.json)
           echo "$spec" | grep -q '"openapi"'
           echo "$spec" | grep -q '/v1/loans/schedule'
           echo "$spec" | grep -q '/v1/baremes'
+          echo "$spec" | grep -q '/v1/simulations'
           # Le chemin non versionne ne doit plus repondre.
           code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
             'http://localhost:3000/loans/schedule?capital=1000&taux=3&mois=12')

@@ -266,3 +266,123 @@ func TestListerRendUneLigneParCategorie(t *testing.T) {
 		t.Errorf("%d noms pour %d categories", len(noms), len(tous))
 	}
 }
+
+func simulations(t *testing.T) *Simulations {
+	t.Helper()
+	pool := ouvrir(t)
+	if err := Migrer(context.Background(), pool); err != nil {
+		t.Fatalf("Migrer : %v", err)
+	}
+	return NewSimulations(pool)
+}
+
+func TestEnregistrerEtLister(t *testing.T) {
+	s := simulations(t)
+	ctx := context.Background()
+
+	vrai := true
+	tem, seuil := "11.23", "13.48"
+	cat, sem, arr := "credits_consommation", "2026S1", "Arrete du 28 juillet 2026"
+	id, err := s.Enregistrer(ctx, Simulation{
+		RequeteID:          "test-" + t.Name(),
+		EmpreinteCle:       "abcd1234",
+		Adresse:            "203.0.113.7",
+		Demande:            []byte(`{"capital":"60000.000","mois":60}`),
+		Teg:                "13.00",
+		CoutCredit:         "18545.460",
+		PremiereMensualite: "1309.091",
+		Tem:                &tem, Seuil: &seuil, Conforme: &vrai,
+		Categorie: &cat, Semestre: &sem, Arrete: &arr,
+	})
+	if err != nil {
+		t.Fatalf("Enregistrer : %v", err)
+	}
+	if id == 0 {
+		t.Fatal("identifiant nul")
+	}
+	t.Cleanup(func() {
+		_, _ = s.pool.Exec(context.Background(), "DELETE FROM simulations WHERE id = $1", id)
+	})
+
+	toutes, err := s.Lister(ctx, 5, false)
+	if err != nil {
+		t.Fatalf("Lister : %v", err)
+	}
+	if len(toutes) == 0 {
+		t.Fatal("aucune simulation rendue")
+	}
+	// La plus recente vient en tete.
+	if toutes[0].ID != id {
+		t.Errorf("premiere simulation %d, attendu %d", toutes[0].ID, id)
+	}
+	sim := toutes[0]
+	if sim.EmpreinteCle != "abcd1234" || sim.Adresse != "203.0.113.7" {
+		t.Errorf("tracabilite incomplete : %+v", sim)
+	}
+	if sim.Teg != "13.00" || sim.Arrete == nil || *sim.Arrete != arr {
+		t.Errorf("resultat mal inscrit : teg %s arrete %v", sim.Teg, sim.Arrete)
+	}
+	if sim.CreeLe == "" {
+		t.Error("horodatage absent")
+	}
+}
+
+// Un controle veut retrouver les prets juges excessifs.
+func TestListerFiltreLesNonConformes(t *testing.T) {
+	s := simulations(t)
+	ctx := context.Background()
+
+	vrai, faux := true, false
+	var ids []int64
+	for _, conforme := range []*bool{&vrai, &faux} {
+		id, err := s.Enregistrer(ctx, Simulation{
+			RequeteID: "filtre-" + t.Name(), Demande: []byte(`{}`),
+			Teg: "13.00", CoutCredit: "1.000", PremiereMensualite: "1.000",
+			Conforme: conforme,
+		})
+		if err != nil {
+			t.Fatalf("Enregistrer : %v", err)
+		}
+		ids = append(ids, id)
+	}
+	t.Cleanup(func() {
+		for _, id := range ids {
+			_, _ = s.pool.Exec(context.Background(), "DELETE FROM simulations WHERE id = $1", id)
+		}
+	})
+
+	nonConformes, err := s.Lister(ctx, 50, true)
+	if err != nil {
+		t.Fatalf("Lister : %v", err)
+	}
+	for _, sim := range nonConformes {
+		if sim.Conforme == nil || *sim.Conforme {
+			t.Errorf("simulation %d rendue alors qu'elle n'est pas non conforme", sim.ID)
+		}
+	}
+	if len(nonConformes) == 0 {
+		t.Error("la simulation non conforme aurait du etre rendue")
+	}
+}
+
+// Une adresse illisible ne doit pas empecher l'inscription : mieux vaut une
+// ligne sans adresse que pas de ligne du tout.
+func TestUneAdresseIllisibleNEmpechePasLInscription(t *testing.T) {
+	s := simulations(t)
+	ctx := context.Background()
+
+	id, err := s.Enregistrer(ctx, Simulation{
+		RequeteID: "adresse-" + t.Name(), Adresse: "pas-une-adresse",
+		Demande: []byte(`{}`), Teg: "8.50",
+		CoutCredit: "1.000", PremiereMensualite: "1.000",
+	})
+	if err != nil {
+		t.Fatalf("Enregistrer : %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = s.pool.Exec(context.Background(), "DELETE FROM simulations WHERE id = $1", id)
+	})
+	if id == 0 {
+		t.Error("la simulation aurait du etre inscrite malgre l'adresse")
+	}
+}

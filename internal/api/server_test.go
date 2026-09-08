@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -632,5 +633,134 @@ func TestCategorieRefuseeSansBase(t *testing.T) {
 	}
 	if got := appeler(h, "GET", "/v1/baremes", "cle-de-test").Code; got != http.StatusServiceUnavailable {
 		t.Errorf("/v1/baremes sans base : HTTP %d, attendu 503", got)
+	}
+}
+
+// Chaque echeancier produit doit laisser une trace, et la reponse rendre son
+// identifiant pour que l'appelant puisse la retrouver.
+func TestChaqueEcheancierLaisseUneTrace(t *testing.T) {
+	h := serveurAvecBase(t)
+
+	w := appeler(h, "GET",
+		"/v1/loans/schedule?capital=60000.000&taux=13&mois=60&categorie=credits_consommation&taux_assurance=1.5&assiette_assurance=capital_initial",
+		"cle-de-test")
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d : %s", w.Code, w.Body.String())
+	}
+	var reponse struct {
+		SimulationID int64 `json:"simulation_id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &reponse); err != nil {
+		t.Fatalf("reponse illisible : %v", err)
+	}
+	if reponse.SimulationID == 0 {
+		t.Fatal("aucun identifiant de simulation rendu")
+	}
+	requeteID := w.Header().Get("X-Request-Id")
+
+	// La trace doit etre consultable et porter le verdict.
+	l := appeler(h, "GET", "/v1/simulations?limite=50", "cle-de-test")
+	if l.Code != http.StatusOK {
+		t.Fatalf("HTTP %d", l.Code)
+	}
+	var liste struct {
+		Simulations []struct {
+			ID           int64   `json:"id"`
+			RequeteID    string  `json:"requete_id"`
+			EmpreinteCle string  `json:"empreinte_cle"`
+			Teg          string  `json:"teg"`
+			Conforme     *bool   `json:"conforme"`
+			Arrete       *string `json:"arrete"`
+		} `json:"simulations"`
+	}
+	if err := json.Unmarshal(l.Body.Bytes(), &liste); err != nil {
+		t.Fatalf("liste illisible : %v", err)
+	}
+
+	var trouvee bool
+	for _, sim := range liste.Simulations {
+		if sim.ID != reponse.SimulationID {
+			continue
+		}
+		trouvee = true
+		if sim.RequeteID != requeteID {
+			t.Errorf("requete_id %q, attendu %q", sim.RequeteID, requeteID)
+		}
+		if sim.Teg != "15.41" {
+			t.Errorf("teg trace %q, attendu 15.41", sim.Teg)
+		}
+		if sim.Conforme == nil || *sim.Conforme {
+			t.Error("le verdict d'excessivite devrait etre trace")
+		}
+		if sim.Arrete == nil || *sim.Arrete == "" {
+			t.Error("l'arrete applique devrait etre trace")
+		}
+		// La cle ne doit jamais figurer, seulement son empreinte.
+		if sim.EmpreinteCle == "cle-de-test" {
+			t.Error("la cle d'API est stockee en clair")
+		}
+		if sim.EmpreinteCle != EmpreinteCle("cle-de-test") {
+			t.Errorf("empreinte %q inattendue", sim.EmpreinteCle)
+		}
+	}
+	if !trouvee {
+		t.Errorf("la simulation %d n'apparait pas dans la piste d'audit", reponse.SimulationID)
+	}
+}
+
+func TestEmpreinteCle(t *testing.T) {
+	if EmpreinteCle("") != "" {
+		t.Error("une cle vide n'a pas d'empreinte")
+	}
+	a, b := EmpreinteCle("cle-a"), EmpreinteCle("cle-b")
+	if a == b {
+		t.Error("deux cles differentes devraient avoir des empreintes differentes")
+	}
+	if len(a) != 8 {
+		t.Errorf("empreinte de %d caracteres, attendu 8", len(a))
+	}
+	if a != EmpreinteCle("cle-a") {
+		t.Error("l'empreinte devrait etre stable")
+	}
+	// L'empreinte ne doit rien laisser filtrer du secret.
+	if strings.Contains(a, "cle") {
+		t.Error("l'empreinte contient un fragment de la cle")
+	}
+}
+
+func TestSimulationsValideSaLimite(t *testing.T) {
+	h := serveurAvecBase(t)
+
+	for _, limite := range []string{"0", "201", "abc", "-1"} {
+		w := appeler(h, "GET", "/v1/simulations?limite="+limite, "cle-de-test")
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("limite=%s : HTTP %d, attendu 400", limite, w.Code)
+		}
+	}
+	for _, limite := range []string{"1", "200"} {
+		if got := appeler(h, "GET", "/v1/simulations?limite="+limite, "cle-de-test").Code; got != http.StatusOK {
+			t.Errorf("limite=%s : HTTP %d, attendu 200", limite, got)
+		}
+	}
+}
+
+func TestSimulationsIndisponibleSansBase(t *testing.T) {
+	h := serveurDeTest(t, nil)
+
+	if got := appeler(h, "GET", "/v1/simulations", "cle-de-test").Code; got != http.StatusServiceUnavailable {
+		t.Errorf("HTTP %d, attendu 503", got)
+	}
+	// Sans base il n'y a rien a tracer : le calcul reste possible, sans
+	// identifiant de simulation.
+	w := appeler(h, "GET", "/v1/loans/schedule?capital=60000.000&taux=13&mois=60", "cle-de-test")
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d", w.Code)
+	}
+	var corps map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &corps); err != nil {
+		t.Fatalf("reponse illisible : %v", err)
+	}
+	if _, present := corps["simulation_id"]; present {
+		t.Error("aucun identifiant ne devrait etre rendu sans base")
 	}
 }

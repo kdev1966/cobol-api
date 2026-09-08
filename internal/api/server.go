@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -61,7 +62,10 @@ type Serveur struct {
 	// baremes est nil quand aucune base n'est fournie : le parametre
 	// categorie est alors refuse et le TEM doit etre passe directement.
 	baremes *db.Baremes
-	mux     *http.ServeMux
+	// audit est nil sans base : le service refuse alors les routes qui en
+	// dependent plutot que de produire des offres sans trace.
+	audit *db.Simulations
+	mux   *http.ServeMux
 }
 
 // NewServeur verifie la coherence de la configuration puis monte les routes.
@@ -87,6 +91,7 @@ func NewServeur(cfg Config, base *db.Pool) (*Serveur, error) {
 	}
 	if base != nil {
 		s.baremes = db.NewBaremes(base)
+		s.audit = db.NewSimulations(base)
 	}
 	s.monterRoutes()
 	return s, nil
@@ -109,6 +114,7 @@ func (s *Serveur) monterRoutes() {
 	// deja change une fois, et un client tiers ne doit pas en patir.
 	s.mux.Handle("GET /v1/loans/schedule", protege(s.echeancier))
 	s.mux.Handle("GET /v1/baremes", protege(s.bareme))
+	s.mux.Handle("GET /v1/simulations", protege(s.simulations))
 	s.mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ecrireErreur(w, http.StatusNotFound, "Ressource inconnue")
 	}))
@@ -145,6 +151,12 @@ func (s *Serveur) index(w http.ResponseWriter, r *http.Request) {
 				"path":        "/v1/baremes",
 				"auth":        true,
 				"description": "Taux effectifs moyens en vigueur, par categorie de concours",
+			},
+			{
+				"method":      "GET",
+				"path":        "/v1/simulations?limite=&non_conformes=",
+				"auth":        true,
+				"description": "Piste d'audit des echeanciers produits",
 			},
 			{
 				"method":      "GET",
@@ -196,6 +208,76 @@ func (s *Serveur) sante(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ecrireJSON(w, code, corps)
+}
+
+// tracer inscrit la simulation dans la piste d'audit. Sans base, il n'y a rien
+// a inscrire et l'identifiant rendu est nul.
+func (s *Serveur) tracer(r *http.Request, demande loan.Demande,
+	resultat *loan.Echeancier, bareme *db.TauxEffectif) (int64, error) {
+	if s.audit == nil {
+		return 0, nil
+	}
+
+	brut, err := json.Marshal(demande)
+	if err != nil {
+		return 0, fmt.Errorf("serialisation de la demande : %w", err)
+	}
+
+	sim := db.Simulation{
+		RequeteID:          IDRequete(r.Context()),
+		EmpreinteCle:       EmpreinteCle(r.Header.Get("X-API-Key")),
+		Adresse:            adresseClient(r),
+		Demande:            brut,
+		Teg:                resultat.Recapitulatif.Teg.String(),
+		CoutCredit:         resultat.Recapitulatif.CoutCredit.String(),
+		PremiereMensualite: resultat.Recapitulatif.PremiereMensualite.String(),
+		Conforme:           resultat.Recapitulatif.Conforme,
+	}
+	if resultat.Recapitulatif.Tem != nil {
+		tem := resultat.Recapitulatif.Tem.String()
+		seuil := resultat.Recapitulatif.Seuil.String()
+		sim.Tem, sim.Seuil = &tem, &seuil
+	}
+	if bareme != nil {
+		sim.Categorie, sim.Semestre, sim.Arrete =
+			&bareme.Categorie, &bareme.Semestre, &bareme.Arrete
+	}
+
+	return s.audit.Enregistrer(r.Context(), sim)
+}
+
+// simulations rend la piste d'audit, de la plus recente a la plus ancienne.
+func (s *Serveur) simulations(w http.ResponseWriter, r *http.Request) {
+	if s.audit == nil {
+		ecrireErreur(w, http.StatusServiceUnavailable, "Piste d'audit indisponible")
+		return
+	}
+
+	limite := 20
+	if brut := r.URL.Query().Get("limite"); brut != "" {
+		n, err := strconv.Atoi(brut)
+		if err != nil || n < 1 || n > 200 {
+			ecrireJSON(w, http.StatusBadRequest, map[string]any{
+				"status": "error", "champ": "limite",
+				"message": "doit etre un entier entre 1 et 200",
+			})
+			return
+		}
+		limite = n
+	}
+	nonConformes := r.URL.Query().Get("non_conformes") == "true"
+
+	toutes, err := s.audit.Lister(r.Context(), limite, nonConformes)
+	if err != nil {
+		slog.Error("lecture de la piste d'audit", "id", IDRequete(r.Context()), "erreur", err)
+		ecrireErreur(w, http.StatusInternalServerError, "Erreur interne")
+		return
+	}
+	ecrireJSON(w, http.StatusOK, map[string]any{
+		"status":      "success",
+		"count":       len(toutes),
+		"simulations": toutes,
+	})
 }
 
 // bareme rend les taux effectifs moyens en vigueur, une ligne par categorie.
@@ -309,11 +391,24 @@ func (s *Serveur) echeancier(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// La piste d'audit est ecrite avant la reponse, et son echec fait echouer
+	// la requete. Un service qui produit des offres de credit doit pouvoir
+	// dire ce qu'il a produit ; une trace a trous n'en est pas une.
+	idSimulation, err := s.tracer(r, demande, resultat, bareme)
+	if err != nil {
+		slog.Error("piste d'audit", "id", IDRequete(r.Context()), "erreur", err)
+		ecrireErreur(w, http.StatusInternalServerError, "Erreur interne")
+		return
+	}
+
 	corps := map[string]any{
 		"status":        "success",
 		"demande":       demande,
 		"recapitulatif": resultat.Recapitulatif,
 		"echeancier":    resultat.Echeancier,
+	}
+	if idSimulation != 0 {
+		corps["simulation_id"] = idSimulation
 	}
 	// Citer l'arrete applique : le verdict de taux excessif ne vaut que
 	// rapporte au bareme sur lequel il repose.

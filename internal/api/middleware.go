@@ -67,6 +67,17 @@ func memeSecret(a, b string) bool {
 	return subtle.ConstantTimeCompare(ha[:], hb[:]) == 1
 }
 
+// EmpreinteCle rend un identifiant court et stable d'une cle, pour la piste
+// d'audit. Huit caracteres du condensat suffisent a distinguer les appelants
+// et ne permettent pas de remonter au secret.
+func EmpreinteCle(cle string) string {
+	if cle == "" {
+		return ""
+	}
+	somme := sha256.Sum256([]byte(cle))
+	return hex.EncodeToString(somme[:4])
+}
+
 // gardeCle exige l'en-tete X-API-Key. Sans cle configuree il laisse passer :
 // le serveur refuse alors de demarrer en production.
 func gardeCle(cle string) func(http.Handler) http.Handler {

@@ -380,6 +380,103 @@
           }
         }
       }
+    },
+    "/v1/simulations": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Piste d'audit",
+        "description": "Echeanciers produits, du plus recent au plus ancien. Chaque echeancier produit y laisse une trace : l'ecriture est synchrone et son echec fait echouer la requete, une piste d'audit a trous n'en etant pas une.",
+        "operationId": "simulations",
+        "parameters": [
+          {
+            "name": "limite",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 20
+            }
+          },
+          {
+            "name": "non_conformes",
+            "in": "query",
+            "required": false,
+            "description": "A true, restreint aux prets juges excessifs.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Piste d'audit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "count",
+                    "simulations"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "simulations": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Simulation"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Limite hors bornes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Cle d'API absente ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Piste d'audit indisponible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -669,6 +766,11 @@
               }
             ],
             "description": "Present seulement quand une categorie a ete fournie."
+          },
+          "simulation_id": {
+            "type": "integer",
+            "description": "Identifiant de la ligne inscrite dans la piste d'audit. Absent quand aucune base n'est configuree.",
+            "example": 42
           }
         }
       },
@@ -705,6 +807,104 @@
             "type": "string",
             "format": "date",
             "example": "2026-07-28"
+          }
+        }
+      },
+      "Simulation": {
+        "type": "object",
+        "description": "Une ligne de la piste d'audit. La cle d'API n'y figure pas : seule une empreinte tronquee permet de distinguer les appelants.",
+        "required": [
+          "id",
+          "requete_id",
+          "demande",
+          "teg",
+          "cout_credit",
+          "premiere_mensualite",
+          "tem",
+          "seuil_excessif",
+          "conforme",
+          "cree_le"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "example": 42
+          },
+          "requete_id": {
+            "type": "string",
+            "description": "Identifiant de correlation, celui du X-Request-Id de la reponse.",
+            "example": "e8e2b43fd27683ae"
+          },
+          "empreinte_cle": {
+            "type": "string",
+            "description": "Huit caracteres du condensat de la cle. Ne permet pas de remonter au secret.",
+            "example": "8254c329"
+          },
+          "adresse": {
+            "type": "string",
+            "example": "203.0.113.7"
+          },
+          "demande": {
+            "type": "object",
+            "description": "La demande telle que le service l'a comprise."
+          },
+          "teg": {
+            "type": "string",
+            "example": "15.41"
+          },
+          "cout_credit": {
+            "type": "string",
+            "example": "38545.460"
+          },
+          "premiere_mensualite": {
+            "type": "string",
+            "example": "1434.091"
+          },
+          "tem": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "11.23"
+          },
+          "seuil_excessif": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "13.48"
+          },
+          "conforme": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "example": false
+          },
+          "categorie": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "credits_consommation"
+          },
+          "semestre": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "2026S1"
+          },
+          "arrete": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "Arrete du 28 juillet 2026"
+          },
+          "cree_le": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       }

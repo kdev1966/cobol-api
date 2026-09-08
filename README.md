@@ -211,6 +211,7 @@ jusqu'à la réponse.
 | `GET` | `/openapi.json` | non | Spécification OpenAPI 3.1 |
 | `GET` | `/v1/loans/schedule?capital=&taux=&mois=&methode=…` | oui | Échéancier de prêt |
 | `GET` | `/v1/baremes` | oui | Taux effectifs moyens en vigueur, par catégorie |
+| `GET` | `/v1/simulations?limite=&non_conformes=` | oui | Piste d'audit des échéanciers produits |
 | `GET` | `/health` | non | État du service ; `503` si le binaire COBOL manque |
 
 Les routes métier sont versionnées. Le format du récapitulatif a déjà changé
@@ -351,13 +352,32 @@ démarrages simultanés.
 
 `/health` sonde réellement la base et rend `503` si elle ne répond pas.
 
+## La piste d'audit
+
+Chaque échéancier produit laisse une trace : la demande normalisée, le TEG, le
+coût du crédit, le verdict, le barème appliqué, l'identifiant de corrélation,
+l'adresse et l'horodatage. La réponse rend l'identifiant de la ligne inscrite.
+
+**L'écriture est synchrone, et son échec fait échouer la requête.** Un service
+qui produit des offres de crédit doit pouvoir dire ce qu'il a produit ; une
+piste d'audit à trous n'en est pas une. Le coût est mesuré : la requête passe
+de 19,5 à **22,4 ms** sur un échéancier de 240 mois.
+
+**La clé d'API n'est jamais stockée.** Seule une empreinte de huit caractères,
+tirée de son condensat, permet de distinguer les appelants — assez pour un
+contrôle, inutile à un attaquant. Un test et une étape de CI vérifient qu'elle
+n'apparaît nulle part.
+
+`?non_conformes=true` restreint aux prêts jugés excessifs, ce que demande un
+contrôle. La table porte un index partiel pour cette requête.
+
 ## Architecture
 
 ```
 cobol/loan-amortization.cbl   règles métier et arithmétique exacte
 internal/loan/                formatage de la demande, appel du binaire, lecture
 internal/api/                 routes, authentification, débit, en-têtes
-internal/db/                  pool, migrations embarquées, barèmes
+internal/db/                  pool, migrations, barèmes, piste d'audit
 cmd/cobol-api/                démarrage et arrêt propre
 internal/api/openapi.json     le contrat, embarqué dans le binaire
 ```
@@ -387,3 +407,4 @@ privilégié et n'écrit rien sur disque.
 - Pas d'échéances irrégulières, de différé d'amortissement ni de remboursement anticipé.
 - Le barème doit être alimenté à chaque nouvel arrêté, par migration. Aucune
   interface d'administration n'existe.
+- La piste d'audit n'a ni purge ni rétention : elle croît indéfiniment.
