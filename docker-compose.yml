@@ -6,9 +6,13 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      # Le programme COBOL est désormais compilé dans l'image : seule la base
-      # de données a besoin de survivre au conteneur.
-      - ./database:/app/database
+      # Volume nommé plutôt qu'un montage lié : le conteneur tourne sous un
+      # utilisateur non privilégié dont l'uid ne correspond à aucun propriétaire
+      # de répertoire de l'hôte.
+      - promocodes-data:/app/database
     environment:
       - NODE_ENV=production
     restart: unless-stopped
+
+volumes:
+  promocodes-data:

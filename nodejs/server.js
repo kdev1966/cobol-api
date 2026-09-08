@@ -1,11 +1,11 @@
 // nodejs/server.js
 
 const express = require("express");
-const { execFile } = require("child_process");
-const crypto = require("crypto");
 const path = require("path");
 const fs = require("fs");
 const sqlite3 = require("sqlite3").verbose();
+
+const { generatePromoCodes } = require("./promo-generator");
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -21,9 +21,11 @@ const DB_PATH =
   process.env.DB_PATH ||
   path.resolve(__dirname, "..", "database", "promocodes.db");
 
-// Le nombre de codes bornait implicitement le PIC 9(2) de l'ancien programme.
-// L'entropie étant désormais construite en amont, la borne devient explicite.
+// L'ancien programme plafonnait le nombre de codes à 99 par accident, via son
+// PIC 9(2), et une limite d'historique négative faisait rendre toute la table
+// par SQLite. Les deux bornes sont désormais explicites.
 const MAX_CODES = 100;
+const MAX_HISTORY = 100;
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new sqlite3.Database(DB_PATH);
@@ -46,68 +48,6 @@ function initDatabase() {
   });
 }
 
-// Neuf chiffres par code : six pour le numéro, trois pour le palier de remise.
-// FUNCTION RANDOM de GnuCOBOL n'est ni amorcée ni cryptographique — elle
-// rejouait la même séquence à chaque exécution du binaire. L'entropie vient
-// donc d'ici, où un CSPRNG est disponible.
-function buildEntropy(count) {
-  const lines = [];
-  for (let i = 0; i < count; i++) {
-    const codeDigits = String(crypto.randomInt(0, 1000000)).padStart(6, "0");
-    const tierDigits = String(crypto.randomInt(0, 1000)).padStart(3, "0");
-    lines.push(codeDigits + tierDigits);
-  }
-  return lines.join("\n") + "\n";
-}
-
-// Une ligne bien formée vaut "PRO123456 - 20% OFF".
-const PROMO_LINE = /^(\S+) - (.+)$/;
-
-function parsePromoCodes(stdout) {
-  const promoCodes = [];
-
-  for (const line of stdout.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed === "") continue;
-
-    const match = PROMO_LINE.exec(trimmed);
-    if (!match) {
-      // Un avertissement du compilateur ou du runtime sur stdout ne doit pas
-      // faire tomber le process.
-      console.warn(`⚠️  Ligne COBOL ignorée (format inattendu) : ${trimmed}`);
-      continue;
-    }
-
-    promoCodes.push({ code: match[1], discount: match[2].trim() });
-  }
-
-  return promoCodes;
-}
-
-// Fonction pour générer des codes promotionnels
-function generatePromoCodes(count = 5) {
-  return new Promise((resolve, reject) => {
-    // execFile plutôt que exec : les arguments sont passés en tableau, sans
-    // interprétation par un shell.
-    const child = execFile(
-      COBOL_PROGRAM_PATH,
-      [String(count)],
-      (error, stdout, stderr) => {
-        if (stderr && stderr.trim() !== "") {
-          console.error(`❌ Sortie d'erreur COBOL : ${stderr.trim()}`);
-        }
-        if (error) {
-          return reject(error);
-        }
-        resolve(parsePromoCodes(stdout));
-      }
-    );
-
-    child.stdin.on("error", reject);
-    child.stdin.end(buildEntropy(count));
-  });
-}
-
 // Fonction pour insérer un code promo en base de données
 function savePromoCodeToDatabase(code, discount) {
   return new Promise((resolve, reject) => {
@@ -115,18 +55,24 @@ function savePromoCodeToDatabase(code, discount) {
       `INSERT OR IGNORE INTO promocodes (code, discount) VALUES (?, ?)`,
       [code, discount],
       function (err) {
-        if (err) reject(err);
-        else resolve(this.lastID);
+        if (err) return reject(err);
+        // INSERT OR IGNORE ne lève pas sur doublon : changes vaut alors 0 et
+        // lastID garde la valeur de l'insertion précédente. Sans ce test, la
+        // réponse annonçait l'identifiant d'une ligne déjà présente.
+        resolve(this.changes > 0 ? this.lastID : null);
       }
     );
   });
 }
 
 // Fonction pour récupérer les codes promos de la base
-function getPromoCodesFromDatabase(limit = 10) {
+function getPromoCodesFromDatabase(limit) {
   return new Promise((resolve, reject) => {
+    // Tri sur id plutôt que created_at : CURRENT_TIMESTAMP a une granularité
+    // d'une seconde, insuffisante pour ordonner des codes créés d'un même
+    // appel.
     db.all(
-      `SELECT * FROM promocodes ORDER BY created_at DESC LIMIT ?`,
+      `SELECT * FROM promocodes ORDER BY id DESC LIMIT ?`,
       [limit],
       (err, rows) => {
         if (err) reject(err);
@@ -134,6 +80,23 @@ function getPromoCodesFromDatabase(limit = 10) {
       }
     );
   });
+}
+
+// Renvoie null si la valeur n'est pas un entier dans [1, max].
+function parseBoundedInt(raw, fallback, max) {
+  if (raw === undefined) return fallback;
+
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > max) return null;
+
+  return value;
+}
+
+// Le détail de l'erreur reste dans les journaux : il porte des chemins absolus
+// et la sortie d'erreur de cobc, que le client n'a pas à connaître.
+function sendServerError(res, context, error) {
+  console.error(`${context} :`, error);
+  res.status(500).json({ status: "error", message: "Erreur interne" });
 }
 
 // Middleware de log
@@ -144,10 +107,9 @@ app.use((req, res, next) => {
 
 // Route pour générer des codes promotionnels
 app.get("/promocodes", async (req, res) => {
-  const rawCount = req.query.count;
-  const count = rawCount === undefined ? 5 : Number(rawCount);
+  const count = parseBoundedInt(req.query.count, 5, MAX_CODES);
 
-  if (!Number.isInteger(count) || count < 1 || count > MAX_CODES) {
+  if (count === null) {
     return res.status(400).json({
       status: "error",
       message: `Le paramètre count doit être un entier entre 1 et ${MAX_CODES}`,
@@ -157,36 +119,38 @@ app.get("/promocodes", async (req, res) => {
   try {
     console.log(`Génération de ${count} codes promotionnels...`);
 
-    const promoCodes = await generatePromoCodes(count);
+    const promoCodes = await generatePromoCodes(count, COBOL_PROGRAM_PATH);
 
-    // Sauvegarde en base de données avec gestion des doublons
-    const savedCodes = await Promise.all(
-      promoCodes.map(async (pc) => {
-        try {
-          return await savePromoCodeToDatabase(pc.code, pc.discount);
-        } catch (error) {
-          console.warn(`Code ${pc.code} existe déjà`);
-          return null;
-        }
-      })
-    );
+    const savedIds = (
+      await Promise.all(
+        promoCodes.map((pc) => savePromoCodeToDatabase(pc.code, pc.discount))
+      )
+    ).filter((id) => id !== null);
 
     res.json({
       status: "success",
       count: promoCodes.length,
       promocodes: promoCodes,
-      savedIds: savedCodes.filter((id) => id !== null),
+      saved: savedIds.length,
+      savedIds,
     });
   } catch (error) {
-    console.error("Erreur lors de la génération des codes :", error);
-    res.status(500).send(`Erreur de traitement : ${error.message}`);
+    sendServerError(res, "Erreur lors de la génération des codes", error);
   }
 });
 
 // Route pour récupérer les codes promos existants
 app.get("/history", async (req, res) => {
+  const limit = parseBoundedInt(req.query.limit, 10, MAX_HISTORY);
+
+  if (limit === null) {
+    return res.status(400).json({
+      status: "error",
+      message: `Le paramètre limit doit être un entier entre 1 et ${MAX_HISTORY}`,
+    });
+  }
+
   try {
-    const limit = parseInt(req.query.limit) || 10;
     const historyCodes = await getPromoCodesFromDatabase(limit);
 
     res.json({
@@ -195,18 +159,31 @@ app.get("/history", async (req, res) => {
       history: historyCodes,
     });
   } catch (error) {
-    console.error("Erreur lors de la récupération de l'historique :", error);
-    res.status(500).send(`Erreur de récupération : ${error.message}`);
+    sendServerError(res, "Erreur lors de la récupération de l'historique", error);
   }
 });
 
-// Route de health check
+// Route de health check. Elle interroge réellement la base : le HEALTHCHECK du
+// conteneur s'appuie dessus, une réponse inconditionnelle ne servirait à rien.
 app.get("/health", (req, res) => {
-  res.json({
-    status: "OK",
-    timestamp: new Date().toISOString(),
-    programExists: fs.existsSync(COBOL_PROGRAM_PATH),
+  const programExists = fs.existsSync(COBOL_PROGRAM_PATH);
+
+  db.get("SELECT 1", (err) => {
+    const healthy = programExists && !err;
+
+    if (err) console.error("Health check, base injoignable :", err);
+
+    res.status(healthy ? 200 : 503).json({
+      status: healthy ? "OK" : "ERROR",
+      timestamp: new Date().toISOString(),
+      programExists,
+      databaseReachable: !err,
+    });
   });
+});
+
+app.use((req, res) => {
+  res.status(404).json({ status: "error", message: "Ressource inconnue" });
 });
 
 // Le serveur ne démarre pas si le binaire ou la base sont indisponibles :
@@ -225,9 +202,11 @@ async function initializeServer() {
   await initDatabase();
 }
 
+let server;
+
 initializeServer()
   .then(() => {
-    app.listen(port, () => {
+    server = app.listen(port, () => {
       console.log(`🚀 Serveur démarré sur le port ${port}`);
     });
   })
@@ -236,13 +215,21 @@ initializeServer()
     process.exit(1);
   });
 
-// Gestion de la fermeture propre de la base de données
-process.on("SIGINT", () => {
-  db.close((err) => {
-    if (err) {
-      console.error(err.message);
-    }
-    console.log("Base de données SQLite fermée");
-    process.exit(0);
-  });
-});
+// Arrêt propre. Docker envoie SIGTERM : sans ce gestionnaire, le conteneur
+// attendait dix secondes puis était tué, sans fermer la base.
+function shutdown(signal) {
+  console.log(`${signal} reçu, arrêt en cours...`);
+
+  const closeDatabase = () =>
+    db.close((err) => {
+      if (err) console.error(err.message);
+      else console.log("Base de données SQLite fermée");
+      process.exit(0);
+    });
+
+  if (server) server.close(closeDatabase);
+  else closeDatabase();
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
