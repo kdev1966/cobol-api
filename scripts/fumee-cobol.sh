@@ -11,7 +11,9 @@ set -e
 binaire="${1:?usage: fumee-cobol.sh <chemin-du-binaire>}"
 
 # 250 000,00 a 3,45 % sur 240 mois, annuite constante, sans frais ni assurance.
-entree="0000025000000034500000240000000000000000000000000000000AN"
+# Les six chiffres avant les lettres sont le plafond d'usure : nul, donc
+# aucune verification demandee.
+entree="0000025000000034500000240000000000000000000000000000000000000AN"
 
 # Mensualite 1443,48 : le recapitulatif porte 0240 puis 0000000144348.
 prefixe_attendu="^R02400000000144348"
