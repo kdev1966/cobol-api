@@ -1,13 +1,12 @@
 # cobol-api
 
-API REST qui expose un générateur de codes promotionnels écrit en COBOL.
+API REST qui expose un moteur d'amortissement de prêt écrit en COBOL.
 
-Le programme COBOL porte les règles métier — forme du code et répartition des
-paliers de remise — pendant que la couche Node fournit l'entropie
-cryptographique, la persistance et le contrôle d'accès. Cette séparation est
-délibérée : `FUNCTION RANDOM` de GnuCOBOL est amorcée par les secondes depuis
-minuit multipliées par des bits de pointeur de module, puis confiée à
-`srandom()`, ce qui est trop faible pour des bons de réduction.
+Le partage des rôles est délibéré. Le COBOL fait l'arithmétique parce qu'il la
+fait exactement : `PIC S9(11)V99` stocke des centimes en décimal, là où le
+`float64` de Go ou de JavaScript ne peut pas représenter 0,07. Sur un
+échéancier de 240 mensualités, cette dérive devient des centimes qui ne
+réconcilient pas. Go fait le HTTP, la validation et le contrôle d'accès.
 
 ## Démarrage
 
@@ -18,116 +17,148 @@ docker compose up -d --build
 ```
 
 ```sh
-curl -H "X-API-Key: $API_KEY" 'http://localhost:3000/promocodes?count=5'
+export K=$(grep '^API_KEY=' .env | cut -d= -f2)
+curl -s -H "X-API-Key: $K" \
+  'http://localhost:3000/loans/schedule?capital=250000.00&taux=3.45&mois=240' | jq
 ```
 
 ```json
 {
   "status": "success",
-  "count": 5,
-  "promocodes": [{ "code": "PROSESZ9K17VZ", "discount": "20% OFF" }],
-  "saved": 5,
-  "savedIds": [1, 2, 3, 4, 5]
+  "demande": { "capital": "250000.00", "taux": "3.450000", "mois": 240 },
+  "recapitulatif": {
+    "echeances": 240,
+    "mensualite": 1443.48,
+    "total_interets": 96436.65,
+    "total_du": 346436.65
+  },
+  "echeancier": [
+    { "n": 1, "paiement": 1443.48, "interets": 718.75, "capital": 724.73, "solde": 249275.27 },
+    { "n": 240, "paiement": 1444.93, "interets": 4.14, "capital": 1440.79, "solde": 0.00 }
+  ]
 }
 ```
+
+La dernière échéance vaut 1444,93 et non 1443,48 : elle absorbe le résidu
+d'arrondi accumulé sur les 239 mois précédents, comme le veut la pratique
+bancaire.
+
+## Les invariants
+
+Le moteur tient quatre garanties, vérifiées par la suite de tests sur neuf
+jeux de paramètres allant du taux nul à 600 mensualités :
+
+1. la somme des parts de capital égale **exactement** le capital emprunté ;
+2. la somme des échéances égale **exactement** capital + intérêts ;
+3. le solde après la dernière échéance est **exactement** nul ;
+4. sur chaque ligne, paiement = capital + intérêts.
+
+Les montants ne transitent jamais par un flottant : le COBOL écrit des
+chiffres, Go y insère le point décimal et les transporte en `json.Number`
+jusqu'à la réponse.
 
 ## Endpoints
 
 | Méthode | Chemin | Clé requise | Description |
 |---|---|---|---|
-| `GET` | `/` | non | Index du service et liste des endpoints |
-| `GET` | `/promocodes?count=N` | oui | Génère N codes (1-100, défaut 5) et les enregistre |
-| `GET` | `/history?limit=N` | oui | Rend les N derniers codes (1-100, défaut 10) |
-| `GET` | `/health` | non | État du service ; `503` si la base ou le binaire manquent |
+| `GET` | `/` | non | Index du service |
+| `GET` | `/loans/schedule?capital=&taux=&mois=` | oui | Échéancier à mensualité constante |
+| `GET` | `/health` | non | État du service ; `503` si le binaire COBOL manque |
 
-La clé passe dans l'en-tête `X-API-Key`. `/health` reste ouvert parce que le
-`HEALTHCHECK` du conteneur s'appuie dessus.
+Paramètres : `capital` de 0.01 à 99999999999.99, `taux` nominal annuel en
+pourcent de 0 à 99.999999, `mois` de 1 à 600. Un paramètre invalide rend un
+`400` nommant le champ fautif ; une clé absente ou invalide un `401` ; un
+dépassement du plafond de requêtes un `429`.
 
-Un paramètre hors bornes est refusé en `400`, une clé absente ou invalide en
-`401`, un dépassement du plafond de requêtes en `429`.
+La clé passe dans l'en-tête `X-API-Key`. `/health` reste ouvert et hors
+plafond parce que le `HEALTHCHECK` du conteneur s'appuie dessus.
 
 ## Configuration
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `API_KEY` | — | Clé attendue sur les endpoints protégés. **Obligatoire quand `NODE_ENV=production`** : sans elle, le serveur refuse de démarrer. Absente hors production, le service tourne ouvert avec un avertissement. |
+| `API_KEY` | — | Clé attendue sur les endpoints protégés. **Obligatoire quand `APP_ENV=production`** : sans elle, le serveur refuse de démarrer. Absente hors production, le service tourne ouvert avec un avertissement. |
 | `RATE_LIMIT_PER_MINUTE` | `30` | Requêtes par minute et par adresse IP |
 | `CORS_ORIGINS` | vide | Origines navigateur autorisées, séparées par des virgules. Vide = aucune origine croisée. |
 | `PORT` | `3000` | Port d'écoute |
-| `DB_PATH` | `../database/promocodes.db` | Fichier SQLite |
-| `COBOL_PROGRAM_PATH` | `../bin/promo_generator` | Binaire COBOL compilé |
+| `COBOL_PROGRAM_PATH` | `/app/bin/loan_amortization` | Binaire COBOL compilé |
+| `APP_ENV` | vide | `production` rend `API_KEY` obligatoire |
 
-Le service tourne derrière la limitation par IP d'`express-rate-limit`. Derrière
-un proxy inverse, configurer `trust proxy` pour que le plafond porte sur
-l'adresse cliente réelle et non sur celle du proxy.
-
-## Format des codes
-
-`PRO` suivi de dix caractères tirés d'un alphabet base32 de Crockford
-(`0-9`, `A-Z` sans `I`, `L`, `O` ni `U`, écartés pour éviter les confusions à la
-saisie). Soit environ 1,1 × 10¹⁵ combinaisons, contre 900 000 pour le format à
-six chiffres d'origine, qui était énumérable.
-
-Les remises sont réparties sur trois paliers : `10% OFF`, `20% OFF`, `30% OFF`.
+Le plafond de débit porte sur l'adresse vue par le serveur. Les en-têtes
+`X-Forwarded-For` sont volontairement ignorés : ils sont falsifiables tant
+qu'aucun proxy de confiance n'est déclaré. Derrière un proxy inverse, il faut
+donc en tenir compte avant de se fier au plafond.
 
 ## Contrat du programme COBOL
 
-Le binaire est autonome et testable sans la couche Node :
+Le binaire est autonome et testable sans la couche Go. Il lit sur son entrée
+standard **une ligne de 25 chiffres** — capital `9(11)V99`, taux annuel
+`9(2)V9(6)`, durée `9(4)` — et écrit des enregistrements à largeur fixe :
 
 ```
-promo_generator <nombre-de-codes>
+R + échéances 9(4) + mensualité 9(11)V99 + total intérêts 9(13)V99 + total dû 9(13)V99   48 car.
+E + numéro    9(4) + paiement   9(11)V99 + intérêts, capital, solde 9(11)V99             57 car.
 ```
-
-Il lit sur son entrée standard une ligne de treize caractères par code — dix de
-corps, puis trois chiffres désignant le palier — et écrit une ligne
-`<CODE> - <REMISE>` par code.
 
 ```sh
-$ printf 'ABCDEFGHJK000\n0123456789001\n' | ./bin/promo_generator 2
-PROABCDEFGHJK - 10% OFF
-PRO0123456789 - 20% OFF
+$ echo "0000025000000034500000240" | ./bin/loan_amortization | head -2
+R02400000000144348000000009643665000000034643665
+E00010000000144348000000007187500000000724730000024927527
 ```
 
-Codes de sortie : `2` si le nombre de codes est absent ou invalide, `3` si une
-ligne d'entropie est malformée.
+Codes de sortie : `2` si l'entrée est malformée, `3` si le capital ou la durée
+sont nuls.
+
+**`JSON GENERATE` n'est délibérément pas utilisé.** Le paquet GnuCOBOL des
+distributions est construit avec `JSON library: not found` : l'instruction
+compile, s'exécute, et ne produit rien — ni erreur, ni avertissement. Même
+piège pour `JSON PARSE`, non implémentée, qui rend des champs à zéro sans
+signaler quoi que ce soit. La mise en forme revient donc à l'appelant.
 
 ## Développement
 
-Sans Docker, il faut GnuCOBOL (`cobc`) et Node 20.17 ou plus.
+Il faut GnuCOBOL (`cobc`) et Go 1.24 ou plus.
 
 ```sh
 mkdir -p bin
-cobc -x -free cobol/promo-code-generator.cbl -o bin/promo_generator
-cd nodejs && npm install && npm start
+cobc -x -free cobol/loan-amortization.cbl -o bin/loan_amortization
+go test ./...
+go run ./cmd/cobol-api
 ```
 
 Sans `API_KEY`, le serveur démarre en laissant les endpoints ouverts et le
-signale par un avertissement.
+signale par un avertissement. Les tests qui ont besoin du binaire COBOL se
+sautent d'eux-mêmes s'il n'a pas été compilé ; les autres tournent sans lui.
 
-La suite de tests ne nécessite pas de compilateur COBOL : elle s'appuie sur un
-double qui respecte le même contrat `argv`/`stdin`.
-
-```sh
-cd nodejs && npm test
-```
-
-Ces tests tournent aussi pendant la construction de l'image, de même qu'un test
-de fumée sur le binaire COBOL : une régression bloque le build.
+L'image exécute `go vet`, la suite de tests et un test de fumée sur le binaire
+COBOL pendant sa construction : une régression bloque le build.
 
 ## Architecture
 
 ```
-cobol/promo-code-generator.cbl   règles métier : forme du code, paliers
-nodejs/promo-generator.js        entropie cryptographique, appel du binaire
-nodejs/auth.js                   contrôle de la clé d'API
-nodejs/server.js                 routes HTTP, SQLite, arrêt propre
+cobol/loan-amortization.cbl   règles métier et arithmétique exacte
+internal/loan/                formatage de la demande, appel du binaire, lecture
+internal/api/                 routes, authentification, débit, en-têtes
+cmd/cobol-api/                démarrage et arrêt propre
 ```
 
-L'image est construite en deux étapes : le compilateur COBOL et la chaîne de
-build C ne sont présents qu'à la construction. L'image d'exécution ne contient
-ni `cobc` ni `gcc`, seulement la bibliothèque `libcob`, et tourne sous un
-utilisateur non privilégié.
+Le service lance un processus COBOL par requête. Ce lancement coûte environ
+4,7 ms, contre quelques microsecondes pour le calcul lui-même — mais il achète
+l'isolation : un abend COBOL tue un processus jetable et rend une erreur, là
+où un appel en direct emporterait le serveur. Un échéancier complet étant
+produit par un seul lancement, ce coût est amorti sur toute la réponse.
 
-La base vit dans un volume Docker nommé plutôt que dans un montage lié : l'uid
-du conteneur ne correspond à aucun propriétaire de répertoire de l'hôte.
-Attention, `docker compose down -v` la supprime.
+L'image est construite en trois étapes. Ni `cobc`, ni `gcc`, ni la chaîne Go
+ne sont présents à l'exécution : il ne reste que le binaire Go statique, le
+binaire COBOL, et `libcob`. Le conteneur tourne sous un utilisateur non
+privilégié et n'écrit rien sur disque.
+
+## Limites connues
+
+- Seule la mensualité constante est implémentée. L'amortissement à capital
+  constant et le prêt in fine ne le sont pas.
+- Le taux périodique est **proportionnel** (taux nominal annuel divisé par
+  douze), et non le taux actuariel équivalent. C'est un choix, pas un oubli.
+- Le TAEG n'est pas calculé : il demande une résolution itérative de taux de
+  rendement interne.
+- Ni assurance, ni frais de dossier, ni échéances irrégulières.

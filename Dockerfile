@@ -1,85 +1,83 @@
 #  Dockerfile
 
-# --- Construction : compilateurs COBOL et C, chaîne de build Node ------------
-FROM ubuntu:24.04 AS builder
+# --- Compilation du programme COBOL -----------------------------------------
+FROM debian:12 AS cobol-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# GnuCOBOL traduit en C : un compilateur C est nécessaire ici. Node.js vient de
-# NodeSource car le paquet « nodejs » de la distribution est trop ancien.
-# Ubuntu 24.04 plutôt que 22.04 : le binaire précompilé de sqlite3 exige
-# GLIBC 2.38, absent de 22.04 qui s'arrête à 2.35.
+# GnuCOBOL traduit en C : le paquet tire le compilateur dont il a besoin.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    build-essential \
-    ca-certificates \
-    curl \
-    gnucobol \
-    gnupg \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
+    apt-get install -y --no-install-recommends gnucobol \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
-
-# Compilation du programme COBOL, suivie d'un test de fumée : le build échoue
-# si le binaire ne rend pas le format attendu.
+WORKDIR /src
 COPY cobol/ ./cobol/
-RUN mkdir -p /app/bin && \
-    cobc -x -free cobol/promo-code-generator.cbl -o /app/bin/promo_generator && \
-    echo "ABCDEFGHJK042" | /app/bin/promo_generator 1 | grep -q " - "
 
-# Dépendances Node avant les sources : la couche reste en cache tant que les
-# manifestes ne bougent pas. npm ci installe exactement le lockfile.
-COPY nodejs/package.json nodejs/package-lock.json ./nodejs/
-RUN cd nodejs && npm ci --omit=dev
+# Compilation suivie d'un test de fumee sur un cas de reference : le build
+# echoue si la mensualite ou le nombre de lignes changent.
+RUN mkdir -p /out && \
+    cobc -x -free cobol/loan-amortization.cbl -o /out/loan_amortization && \
+    echo "0000025000000034500000240" | /out/loan_amortization > /tmp/fumee.txt && \
+    grep -q '^R02400000000144348' /tmp/fumee.txt && \
+    test "$(wc -l < /tmp/fumee.txt)" = "241"
 
-COPY nodejs/ ./nodejs/
+# --- Compilation du service Go ----------------------------------------------
+FROM golang:1.26-bookworm AS go-builder
 
-# La suite de tests tourne à la construction : une régression bloque l'image.
-RUN cd nodejs && npm test
+# libcob permet d'executer le binaire COBOL pendant les tests.
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libcob4 \
+    && rm -rf /var/lib/apt/lists/*
 
-# --- Exécution : ni compilateur C, ni compilateur COBOL ----------------------
-FROM ubuntu:24.04
+WORKDIR /src
+
+# Dependances avant les sources : la couche reste en cache tant que les
+# manifestes ne bougent pas.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+COPY --from=cobol-builder /out/loan_amortization ./bin/loan_amortization
+
+# La suite de tests tourne a la construction, invariants de l'echeancier
+# compris : une regression bloque l'image.
+RUN go vet ./... && go test ./...
+
+# CGO desactive : le binaire est statique et ne depend pas de la libc de
+# l'image d'execution.
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cobol-api ./cmd/cobol-api
+
+# --- Execution : ni compilateur C, ni compilateur COBOL, ni chaine Go -------
+FROM debian:12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# libcob4t64 seul suffit à exécuter le binaire ; curl sert au HEALTHCHECK.
+# libcob4 suffit a executer le programme COBOL ; curl sert au HEALTHCHECK.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
-    gnupg \
-    libcob4t64 \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
+    libcob4 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY --from=builder /app/bin/ ./bin/
-COPY --from=builder /app/nodejs/ ./nodejs/
+COPY --from=cobol-builder /out/loan_amortization ./bin/loan_amortization
+COPY --from=go-builder /out/cobol-api ./cobol-api
 
-# Utilisateur non privilégié, propriétaire du seul répertoire écrit.
-RUN useradd --system --create-home --shell /usr/sbin/nologin cobolapi && \
-    mkdir -p /app/database && \
-    chown cobolapi:cobolapi /app/database
+# Utilisateur non privilegie. Le service n'ecrit rien sur disque.
+RUN useradd --system --create-home --shell /usr/sbin/nologin cobolapi
+USER cobolapi
 
-ENV COBOL_PROGRAM_PATH=/app/bin/promo_generator \
-    DB_PATH=/app/database/promocodes.db \
-    NODE_ENV=production \
+ENV COBOL_PROGRAM_PATH=/app/bin/loan_amortization \
+    APP_ENV=production \
     PORT=3000
 
-# Créer un volume pour la base de données
-VOLUME /app/database
-
-# Exposer le port
 EXPOSE 3000
-
-USER cobolapi
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -fsS http://localhost:3000/health || exit 1
 
-# Commande de démarrage
-CMD ["node", "nodejs/server.js"]
+CMD ["/app/cobol-api"]

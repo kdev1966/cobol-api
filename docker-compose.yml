@@ -5,19 +5,11 @@ services:
     build: .
     ports:
       - "3000:3000"
-    volumes:
-      # Volume nommé plutôt qu'un montage lié : le conteneur tourne sous un
-      # utilisateur non privilégié dont l'uid ne correspond à aucun propriétaire
-      # de répertoire de l'hôte.
-      - promocodes-data:/app/database
     environment:
-      - NODE_ENV=production
-      # /promocodes et /history émettent et listent des bons de réduction : sans
-      # API_KEY, le serveur refuse de démarrer en production. Voir .env.example.
+      - APP_ENV=production
+      # Le moteur calcule des echeanciers de credit : sans API_KEY, le
+      # serveur refuse de demarrer en production. Voir .env.example.
       - API_KEY=${API_KEY:-}
       - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-30}
       - CORS_ORIGINS=${CORS_ORIGINS:-}
     restart: unless-stopped
-
-volumes:
-  promocodes-data:

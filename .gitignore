@@ -1,6 +1,6 @@
-# Node.js dependencies
-node_modules/
-npm-debug.log*
+# Binaires COBOL et Go compiles
+bin/
+/cobol-api
 
 # Environment and sensitive files
 .env
@@ -13,11 +13,3 @@ npm-debug.log*
 # OS files
 .DS_Store
 Thumbs.db
-
-# Binaires COBOL compilés
-bin/
-cobol/promo_generator
-
-# Base de données locale
-database/
-*.db
