@@ -97,10 +97,12 @@ func (s *Serveur) index(w http.ResponseWriter, r *http.Request) {
 		"authentication": "En-tete X-API-Key sur les endpoints marques auth",
 		"endpoints": []map[string]any{
 			{
-				"method":      "GET",
-				"path":        "/loans/schedule?capital=&taux=&mois=",
-				"auth":        true,
-				"description": "Echeancier a mensualite constante",
+				"method":             "GET",
+				"path":               "/loans/schedule?capital=&taux=&mois=&methode=",
+				"auth":               true,
+				"description":        "Echeancier de pret",
+				"methodes":           loan.MethodesAcceptees(),
+				"methode_par_defaut": loan.MethodeParDefaut,
 			},
 			{
 				"method":      "GET",
@@ -134,7 +136,8 @@ func (s *Serveur) sante(w http.ResponseWriter, r *http.Request) {
 
 func (s *Serveur) echeancier(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	demande, err := loan.ParseDemande(q.Get("capital"), q.Get("taux"), q.Get("mois"))
+	demande, err := loan.ParseDemande(
+		q.Get("capital"), q.Get("taux"), q.Get("mois"), q.Get("methode"))
 	if err != nil {
 		var invalide *loan.ErreurValidation
 		if errors.As(err, &invalide) {

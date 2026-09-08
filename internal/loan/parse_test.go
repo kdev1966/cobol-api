@@ -58,7 +58,7 @@ func TestParseDemandeAccepteLesBornes(t *testing.T) {
 	}
 
 	for _, c := range cas {
-		if _, err := ParseDemande(c.capital, c.taux, c.mois); err != nil {
+		if _, err := ParseDemande(c.capital, c.taux, c.mois, ""); err != nil {
 			t.Errorf("ParseDemande(%q,%q,%q) : %v", c.capital, c.taux, c.mois, err)
 		}
 	}
@@ -81,7 +81,7 @@ func TestParseDemandeRefuseHorsBornes(t *testing.T) {
 	}
 
 	for _, c := range cas {
-		_, err := ParseDemande(c.capital, c.taux, c.mois)
+		_, err := ParseDemande(c.capital, c.taux, c.mois, "")
 		if err == nil {
 			t.Errorf("%s : aurait du echouer", c.nom)
 			continue
@@ -98,18 +98,34 @@ func TestParseDemandeRefuseHorsBornes(t *testing.T) {
 }
 
 func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
-	d, err := ParseDemande("250000.00", "3.45", "240")
+	d, err := ParseDemande("250000.00", "3.45", "240", "")
 	if err != nil {
 		t.Fatalf("ParseDemande : %v", err)
 	}
 
 	ligne := ligneEntree(d)
-	if got, want := ligne, "0000025000000034500000240\n"; got != want {
+	// 13 chiffres de capital, 8 de taux, 4 de duree, puis la lettre de la
+	// methode. La longueur est un contrat avec le PIC X(26) du COBOL.
+	if got, want := ligne, "0000025000000034500000240A\n"; got != want {
 		t.Errorf("ligneEntree = %q, attendu %q", got, want)
 	}
-	// Le programme COBOL lit un PIC X(25) : la longueur est un contrat.
-	if len(ligne)-1 != 25 {
-		t.Errorf("longueur %d, attendu 25", len(ligne)-1)
+	if len(ligne)-1 != 26 {
+		t.Errorf("longueur %d, attendu 26", len(ligne)-1)
+	}
+
+	// Chaque methode doit poser sa lettre.
+	for saisie, lettre := range map[string]byte{
+		"annuite_constante": 'A',
+		"capital_constant":  'C',
+		"in_fine":           'I',
+	} {
+		d, err := ParseDemande("250000.00", "3.45", "240", saisie)
+		if err != nil {
+			t.Fatalf("ParseDemande(%q) : %v", saisie, err)
+		}
+		if got := ligneEntree(d)[25]; got != lettre {
+			t.Errorf("methode %q : lettre %q, attendu %q", saisie, got, lettre)
+		}
 	}
 }
 

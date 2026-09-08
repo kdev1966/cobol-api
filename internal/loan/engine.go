@@ -34,10 +34,13 @@ type Demande struct {
 	CapitalCentimes int64 `json:"-"`
 	// TauxMillioniemes porte le taux nominal annuel, 3.45 % valant 3450000.
 	TauxMillioniemes int64 `json:"-"`
-	Mois             int   `json:"mois"`
+	// CodeMethode est la lettre attendue par le programme COBOL.
+	CodeMethode byte `json:"-"`
 
+	Mois    int    `json:"mois"`
 	Capital string `json:"capital"`
 	Taux    string `json:"taux"`
+	Methode string `json:"methode"`
 }
 
 // Format des enregistrements rendus par le programme COBOL. Les positions
@@ -45,7 +48,7 @@ type Demande struct {
 const (
 	tagRecap     = 'R'
 	tagEcheance  = 'E'
-	longRecap    = 48
+	longRecap    = 61
 	longEcheance = 57
 )
 
@@ -56,10 +59,14 @@ const (
 // flottant, sans quoi l'exactitude au centime que garantit le moteur serait
 // perdue au moment de la relecture.
 type Recapitulatif struct {
-	Echeances     int         `json:"echeances"`
-	Mensualite    json.Number `json:"mensualite"`
-	TotalInterets json.Number `json:"total_interets"`
-	TotalDu       json.Number `json:"total_du"`
+	Echeances int `json:"echeances"`
+	// Sous la methode a annuite constante, toutes les echeances sauf la
+	// derniere valent PremiereEcheance. Sous les deux autres, l'echeance
+	// varie a chaque periode.
+	PremiereEcheance json.Number `json:"premiere_echeance"`
+	DerniereEcheance json.Number `json:"derniere_echeance"`
+	TotalInterets    json.Number `json:"total_interets"`
+	TotalDu          json.Number `json:"total_du"`
 }
 
 // Echeance est une ligne de l'echeancier.
@@ -90,10 +97,11 @@ func NewMoteur(chemin string) *Moteur {
 	return &Moteur{Chemin: chemin}
 }
 
-// ligneEntree rend les 25 chiffres attendus par le programme :
-// capital 9(11)V99, taux 9(2)V9(6), duree 9(4).
+// ligneEntree rend les 26 caracteres attendus par le programme : capital
+// 9(11)V99, taux 9(2)V9(6), duree 9(4), puis la lettre de la methode.
 func ligneEntree(d Demande) string {
-	return fmt.Sprintf("%013d%08d%04d\n", d.CapitalCentimes, d.TauxMillioniemes, d.Mois)
+	return fmt.Sprintf("%013d%08d%04d%c\n",
+		d.CapitalCentimes, d.TauxMillioniemes, d.Mois, d.CodeMethode)
 }
 
 // Calculer produit l'echeancier de la demande.
@@ -195,13 +203,16 @@ func lireRecapitulatif(ligne string, r *Recapitulatif) error {
 	if r.Echeances, err = entier(ligne[1:5]); err != nil {
 		return fmt.Errorf("recapitulatif illisible : %w", err)
 	}
-	if r.Mensualite, err = montant(ligne[5:18]); err != nil {
+	if r.PremiereEcheance, err = montant(ligne[5:18]); err != nil {
 		return fmt.Errorf("recapitulatif illisible : %w", err)
 	}
-	if r.TotalInterets, err = montant(ligne[18:33]); err != nil {
+	if r.DerniereEcheance, err = montant(ligne[18:31]); err != nil {
 		return fmt.Errorf("recapitulatif illisible : %w", err)
 	}
-	if r.TotalDu, err = montant(ligne[33:48]); err != nil {
+	if r.TotalInterets, err = montant(ligne[31:46]); err != nil {
+		return fmt.Errorf("recapitulatif illisible : %w", err)
+	}
+	if r.TotalDu, err = montant(ligne[46:61]); err != nil {
 		return fmt.Errorf("recapitulatif illisible : %w", err)
 	}
 	return nil

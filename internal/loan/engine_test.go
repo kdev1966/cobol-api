@@ -29,8 +29,9 @@ func binaire(t *testing.T) string {
 
 // recap et echeance fabriquent les enregistrements a largeur fixe attendus,
 // aux memes positions que celles produites par le programme COBOL.
-func recap(echeances int, mensualite, interets, total string) string {
-	return fmt.Sprintf("R%04d%013s%015s%015s", echeances, mensualite, interets, total)
+func recap(echeances int, premiere, derniere, interets, total string) string {
+	return fmt.Sprintf("R%04d%013s%013s%015s%015s",
+		echeances, premiere, derniere, interets, total)
 }
 
 func echeance(n int, paiement, interets, capital, solde string) string {
@@ -42,7 +43,7 @@ func TestLireSortieEcarteLesLignesParasites(t *testing.T) {
 	// doit pas faire echouer le calcul.
 	sortie := bytes.NewBufferString(strings.Join([]string{
 		"libcob: warning: implicit CLOSE of SYSIN",
-		recap(2, "0000000010000", "000000000000500", "000000000020500"),
+		recap(2, "0000000010000", "0000000010500", "000000000000500", "000000000020500"),
 		echeance(1, "0000000010000", "0000000000300", "0000000009700", "0000000010300"),
 		"",
 		echeance(2, "0000000010500", "0000000000200", "0000000010300", "0000000000000"),
@@ -56,8 +57,11 @@ func TestLireSortieEcarteLesLignesParasites(t *testing.T) {
 	if len(res.Echeancier) != 2 {
 		t.Fatalf("%d echeances, attendu 2", len(res.Echeancier))
 	}
-	if got := res.Recapitulatif.Mensualite.String(); got != "100.00" {
-		t.Errorf("mensualite %q, attendu \"100.00\"", got)
+	if got := res.Recapitulatif.PremiereEcheance.String(); got != "100.00" {
+		t.Errorf("premiere echeance %q, attendu \"100.00\"", got)
+	}
+	if got := res.Recapitulatif.DerniereEcheance.String(); got != "105.00" {
+		t.Errorf("derniere echeance %q, attendu \"105.00\"", got)
 	}
 	if got := res.Echeancier[1].Solde.String(); got != "0.00" {
 		t.Errorf("solde final %q, attendu \"0.00\"", got)
@@ -66,7 +70,7 @@ func TestLireSortieEcarteLesLignesParasites(t *testing.T) {
 
 func TestLireSortieRefuseUnComptageIncoherent(t *testing.T) {
 	sortie := bytes.NewBufferString(strings.Join([]string{
-		recap(5, "0000000010000", "000000000000500", "000000000020500"),
+		recap(5, "0000000010000", "0000000010500", "000000000000500", "000000000020500"),
 		echeance(1, "0000000010000", "0000000000300", "0000000009700", "0000000000000"),
 	}, "\n"))
 
@@ -76,7 +80,7 @@ func TestLireSortieRefuseUnComptageIncoherent(t *testing.T) {
 }
 
 func TestLireSortieRefuseUnRecapitulatifEnDouble(t *testing.T) {
-	ligne := recap(1, "0000000010000", "000000000000500", "000000000020500")
+	ligne := recap(1, "0000000010000", "0000000010000", "000000000000500", "000000000020500")
 	sortie := bytes.NewBufferString(ligne + "\n" + ligne)
 
 	if _, err := lireSortie(sortie); err == nil {
@@ -96,7 +100,7 @@ func TestLesMontantsNeTransitentPasParUnFlottant(t *testing.T) {
 	// 0.07 n'a pas de representation binaire exacte, et 8388608.01 depasse
 	// la precision d'un float32. Les deux doivent ressortir tels quels.
 	sortie := bytes.NewBufferString(strings.Join([]string{
-		recap(1, "0000000000007", "000000000000007", "000000000000007"),
+		recap(1, "0000000000007", "0000000000007", "000000000000007", "000000000000007"),
 		echeance(1, "0838860801000", "0000000000007", "0000000000029", "0000000000000"),
 	}, "\n"))
 
@@ -104,8 +108,8 @@ func TestLesMontantsNeTransitentPasParUnFlottant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lireSortie : %v", err)
 	}
-	if got := res.Recapitulatif.Mensualite.String(); got != "0.07" {
-		t.Errorf("mensualite %q, attendu \"0.07\"", got)
+	if got := res.Recapitulatif.PremiereEcheance.String(); got != "0.07" {
+		t.Errorf("premiere echeance %q, attendu \"0.07\"", got)
 	}
 	if got := res.Echeancier[0].Paiement.String(); got != "8388608010.00" {
 		t.Errorf("paiement %q, attendu \"8388608010.00\"", got)
@@ -163,59 +167,140 @@ func TestInvariantsDeLEcheancier(t *testing.T) {
 		{"0.01", "3.45", "12"},      // capital minimal
 	}
 
-	for _, c := range cas {
-		t.Run(c.capital+"@"+c.taux+"%x"+c.mois, func(t *testing.T) {
-			d, err := ParseDemande(c.capital, c.taux, c.mois)
-			if err != nil {
-				t.Fatalf("ParseDemande : %v", err)
-			}
+	// Les quatre invariants valent pour les trois methodes.
+	for _, methode := range MethodesAcceptees() {
+		for _, c := range cas {
+			nom := methode + "/" + c.capital + "@" + c.taux + "%x" + c.mois
+			t.Run(nom, func(t *testing.T) {
+				verifierInvariants(t, moteur, c.capital, c.taux, c.mois, methode)
+			})
+		}
+	}
+}
 
-			res, err := moteur.Calculer(context.Background(), d)
-			if err != nil {
-				t.Fatalf("Calculer : %v", err)
-			}
+func verifierInvariants(t *testing.T, moteur *Moteur, capital, taux, mois, methode string) {
+	t.Helper()
 
-			var sommeCapital, sommeInterets, sommeEcheances int64
-			for _, e := range res.Echeancier {
-				p := centimes(t, e.Paiement)
-				i := centimes(t, e.Interets)
-				k := centimes(t, e.Capital)
+	d, err := ParseDemande(capital, taux, mois, methode)
+	if err != nil {
+		t.Fatalf("ParseDemande : %v", err)
+	}
 
-				// Invariant 4 : chaque ligne s'equilibre.
-				if p != i+k {
-					t.Errorf("echeance %d : paiement %d != interets %d + capital %d",
-						e.N, p, i, k)
-				}
-				sommeCapital += k
-				sommeInterets += i
-				sommeEcheances += p
-			}
+	res, err := moteur.Calculer(context.Background(), d)
+	if err != nil {
+		t.Fatalf("Calculer : %v", err)
+	}
 
-			// Invariant 1 : la somme des parts de capital egale le capital.
-			if sommeCapital != d.CapitalCentimes {
-				t.Errorf("somme des parts de capital %d, capital emprunte %d",
-					sommeCapital, d.CapitalCentimes)
-			}
-			// Invariant 2 : les echeances valent le capital plus les interets.
-			if sommeEcheances != d.CapitalCentimes+sommeInterets {
-				t.Errorf("somme des echeances %d, attendu %d",
-					sommeEcheances, d.CapitalCentimes+sommeInterets)
-			}
-			// Invariant 3 : le solde final est nul.
-			if solde := centimes(t, res.Echeancier[len(res.Echeancier)-1].Solde); solde != 0 {
-				t.Errorf("solde final %d, attendu 0", solde)
-			}
-			// Le recapitulatif doit concorder avec le detail.
-			if len(res.Echeancier) != d.Mois {
-				t.Errorf("%d echeances, attendu %d", len(res.Echeancier), d.Mois)
-			}
-			if got := centimes(t, res.Recapitulatif.TotalInterets); got != sommeInterets {
-				t.Errorf("total_interets %d, detail %d", got, sommeInterets)
-			}
-			if got := centimes(t, res.Recapitulatif.TotalDu); got != sommeEcheances {
-				t.Errorf("total_du %d, detail %d", got, sommeEcheances)
-			}
-		})
+	var sommeCapital, sommeInterets, sommeEcheances int64
+	for _, e := range res.Echeancier {
+		p := centimes(t, e.Paiement)
+		i := centimes(t, e.Interets)
+		k := centimes(t, e.Capital)
+
+		// Invariant 4 : chaque ligne s'equilibre.
+		if p != i+k {
+			t.Errorf("echeance %d : paiement %d != interets %d + capital %d", e.N, p, i, k)
+		}
+		sommeCapital += k
+		sommeInterets += i
+		sommeEcheances += p
+	}
+
+	// Invariant 1 : la somme des parts de capital egale le capital emprunte.
+	if sommeCapital != d.CapitalCentimes {
+		t.Errorf("somme des parts de capital %d, capital emprunte %d",
+			sommeCapital, d.CapitalCentimes)
+	}
+	// Invariant 2 : les echeances valent le capital plus les interets.
+	if sommeEcheances != d.CapitalCentimes+sommeInterets {
+		t.Errorf("somme des echeances %d, attendu %d",
+			sommeEcheances, d.CapitalCentimes+sommeInterets)
+	}
+	// Invariant 3 : le solde final est nul.
+	if solde := centimes(t, res.Echeancier[len(res.Echeancier)-1].Solde); solde != 0 {
+		t.Errorf("solde final %d, attendu 0", solde)
+	}
+
+	// Le recapitulatif doit concorder avec le detail.
+	if len(res.Echeancier) != d.Mois {
+		t.Errorf("%d echeances, attendu %d", len(res.Echeancier), d.Mois)
+	}
+	if got := centimes(t, res.Recapitulatif.TotalInterets); got != sommeInterets {
+		t.Errorf("total_interets %d, detail %d", got, sommeInterets)
+	}
+	if got := centimes(t, res.Recapitulatif.TotalDu); got != sommeEcheances {
+		t.Errorf("total_du %d, detail %d", got, sommeEcheances)
+	}
+	if got, veut := centimes(t, res.Recapitulatif.PremiereEcheance),
+		centimes(t, res.Echeancier[0].Paiement); got != veut {
+		t.Errorf("premiere_echeance %d, detail %d", got, veut)
+	}
+	if got, veut := centimes(t, res.Recapitulatif.DerniereEcheance),
+		centimes(t, res.Echeancier[len(res.Echeancier)-1].Paiement); got != veut {
+		t.Errorf("derniere_echeance %d, detail %d", got, veut)
+	}
+}
+
+// Chaque methode a une signature propre, verifiee en plus des invariants
+// communs.
+func TestSignatureDeChaqueMethode(t *testing.T) {
+	moteur := NewMoteur(binaire(t))
+
+	calculer := func(methode string) *Echeancier {
+		t.Helper()
+		d, err := ParseDemande("120000.00", "4.2", "60", methode)
+		if err != nil {
+			t.Fatalf("ParseDemande : %v", err)
+		}
+		res, err := moteur.Calculer(context.Background(), d)
+		if err != nil {
+			t.Fatalf("Calculer : %v", err)
+		}
+		return res
+	}
+
+	// Annuite constante : toutes les echeances sauf la derniere sont egales.
+	annuite := calculer("annuite_constante")
+	ref := annuite.Echeancier[0].Paiement.String()
+	for _, e := range annuite.Echeancier[:len(annuite.Echeancier)-1] {
+		if e.Paiement.String() != ref {
+			t.Fatalf("annuite constante : echeance %d vaut %s, attendu %s", e.N, e.Paiement, ref)
+		}
+	}
+
+	// Capital constant : la part de capital ne bouge pas avant la derniere,
+	// et l'echeance decroit.
+	lineaire := calculer("capital_constant")
+	refCap := lineaire.Echeancier[0].Capital.String()
+	for _, e := range lineaire.Echeancier[:len(lineaire.Echeancier)-1] {
+		if e.Capital.String() != refCap {
+			t.Fatalf("capital constant : part de capital %s a l'echeance %d, attendu %s",
+				e.Capital, e.N, refCap)
+		}
+	}
+	if centimes(t, lineaire.Echeancier[0].Paiement) <=
+		centimes(t, lineaire.Echeancier[len(lineaire.Echeancier)-1].Paiement) {
+		t.Error("capital constant : l'echeance devrait decroitre")
+	}
+
+	// In fine : aucun capital rembourse avant la derniere echeance.
+	inFine := calculer("in_fine")
+	for _, e := range inFine.Echeancier[:len(inFine.Echeancier)-1] {
+		if centimes(t, e.Capital) != 0 {
+			t.Fatalf("in fine : capital %s rembourse a l'echeance %d", e.Capital, e.N)
+		}
+	}
+	if got := inFine.Echeancier[len(inFine.Echeancier)-1].Capital.String(); got != "120000.00" {
+		t.Errorf("in fine : derniere part de capital %s, attendu 120000.00", got)
+	}
+
+	// Plus l'amortissement est rapide, moins on paie d'interets.
+	iLin := centimes(t, lineaire.Recapitulatif.TotalInterets)
+	iAnn := centimes(t, annuite.Recapitulatif.TotalInterets)
+	iFin := centimes(t, inFine.Recapitulatif.TotalInterets)
+	if !(iLin < iAnn && iAnn < iFin) {
+		t.Errorf("interets attendus capital_constant < annuite < in_fine, recu %d %d %d",
+			iLin, iAnn, iFin)
 	}
 }
 
@@ -223,7 +308,7 @@ func TestInvariantsDeLEcheancier(t *testing.T) {
 func TestCasDeReference(t *testing.T) {
 	moteur := NewMoteur(binaire(t))
 
-	d, err := ParseDemande("250000.00", "3.45", "240")
+	d, err := ParseDemande("250000.00", "3.45", "240", "")
 	if err != nil {
 		t.Fatalf("ParseDemande : %v", err)
 	}
@@ -233,7 +318,7 @@ func TestCasDeReference(t *testing.T) {
 	}
 
 	attendus := map[string]string{
-		"mensualite":     res.Recapitulatif.Mensualite.String(),
+		"mensualite":     res.Recapitulatif.PremiereEcheance.String(),
 		"total_interets": res.Recapitulatif.TotalInterets.String(),
 		"total_du":       res.Recapitulatif.TotalDu.String(),
 	}
@@ -266,7 +351,7 @@ func TestCalculerRemonteLEchecDuProgramme(t *testing.T) {
 
 	// Capital nul : le programme COBOL doit refuser et sortir en erreur.
 	_, err := moteur.Calculer(context.Background(), Demande{
-		CapitalCentimes: 0, TauxMillioniemes: 3450000, Mois: 12,
+		CapitalCentimes: 0, TauxMillioniemes: 3450000, Mois: 12, CodeMethode: 'A',
 	})
 	if err == nil {
 		t.Fatal("un capital nul aurait du faire echouer le programme")
@@ -275,7 +360,7 @@ func TestCalculerRemonteLEchecDuProgramme(t *testing.T) {
 
 func TestCalculerAvecUnBinaireIntrouvable(t *testing.T) {
 	moteur := NewMoteur("/inexistant/loan_amortization")
-	d, _ := ParseDemande("1000.00", "3.45", "12")
+	d, _ := ParseDemande("1000.00", "3.45", "12", "")
 
 	if _, err := moteur.Calculer(context.Background(), d); err == nil {
 		t.Fatal("un binaire absent aurait du produire une erreur")

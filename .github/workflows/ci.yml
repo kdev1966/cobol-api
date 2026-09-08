@@ -34,7 +34,7 @@ jobs:
       # le nombre de lignes sont un contrat.
       - name: Test de fumee du binaire COBOL
         run: |
-          echo "0000025000000034500000240" | ./bin/loan_amortization > fumee.txt
+          echo "0000025000000034500000240A" | ./bin/loan_amortization > fumee.txt
           grep -q '^R02400000000144348' fumee.txt
           test "$(wc -l < fumee.txt)" -eq 241
 
@@ -83,9 +83,29 @@ jobs:
         run: |
           reponse=$(curl -sf -H 'X-API-Key: cle-de-ci' \
             'http://localhost:3000/loans/schedule?capital=250000.00&taux=3.45&mois=240')
-          echo "$reponse" | grep -q '"mensualite":1443.48'
+          echo "$reponse" | grep -q '"premiere_echeance":1443.48'
+          echo "$reponse" | grep -q '"derniere_echeance":1444.93'
           echo "$reponse" | grep -q '"total_interets":96436.65'
           echo "$reponse" | grep -q '"n":240,"paiement":1444.93'
+          echo "$reponse" | grep -q '"methode":"annuite_constante"'
+
+      # Les deux autres methodes doivent repondre et se distinguer.
+      - name: Verifier les methodes capital constant et in fine
+        run: |
+          lineaire=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/loans/schedule?capital=120000.00&taux=4.2&mois=60&methode=capital_constant')
+          echo "$lineaire" | grep -q '"total_interets":12810.00'
+
+          in_fine=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/loans/schedule?capital=120000.00&taux=4.2&mois=60&methode=in_fine')
+          echo "$in_fine" | grep -q '"total_interets":25200.00'
+          echo "$in_fine" | grep -q '"n":60,"paiement":120420.00'
+
+      - name: Verifier le refus d'une methode inconnue
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/loans/schedule?capital=1000&taux=3&mois=12&methode=lineaire')
+          test "$code" = "400"
 
       - name: Verifier le refus sans cle
         run: |

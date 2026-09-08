@@ -17,7 +17,7 @@ COPY cobol/ ./cobol/
 # echoue si la mensualite ou le nombre de lignes changent.
 RUN mkdir -p /out && \
     cobc -x -free cobol/loan-amortization.cbl -o /out/loan_amortization && \
-    echo "0000025000000034500000240" | /out/loan_amortization > /tmp/fumee.txt && \
+    echo "0000025000000034500000240A" | /out/loan_amortization > /tmp/fumee.txt && \
     grep -q '^R02400000000144348' /tmp/fumee.txt && \
     test "$(wc -l < /tmp/fumee.txt)" -eq 241
 

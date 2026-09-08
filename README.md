@@ -25,10 +25,14 @@ curl -s -H "X-API-Key: $K" \
 ```json
 {
   "status": "success",
-  "demande": { "capital": "250000.00", "taux": "3.450000", "mois": 240 },
+  "demande": {
+    "capital": "250000.00", "taux": "3.450000",
+    "mois": 240, "methode": "annuite_constante"
+  },
   "recapitulatif": {
     "echeances": 240,
-    "mensualite": 1443.48,
+    "premiere_echeance": 1443.48,
+    "derniere_echeance": 1444.93,
     "total_interets": 96436.65,
     "total_du": 346436.65
   },
@@ -42,6 +46,23 @@ curl -s -H "X-API-Key: $K" \
 La dernière échéance vaut 1444,93 et non 1443,48 : elle absorbe le résidu
 d'arrondi accumulé sur les 239 mois précédents, comme le veut la pratique
 bancaire.
+
+## Les trois méthodes
+
+| `methode` | Comportement |
+|---|---|
+| `annuite_constante` *(défaut)* | L'échéance ne bouge pas ; la part de capital croît à mesure que les intérêts diminuent. |
+| `capital_constant` | La part de capital ne bouge pas ; l'échéance décroît. Amortissement plus rapide, donc moins d'intérêts. |
+| `in_fine` | Intérêts seuls chaque mois, capital remboursé en totalité à la dernière échéance. Le plus coûteux. |
+
+Sur 120 000 € à 4,2 % sur 60 mois, le total des intérêts va de **12 810 €** à
+capital constant, à **13 249,77 €** en annuité constante, à **25 200 €** en in
+fine — un écart que la suite de tests vérifie comme un invariant à part
+entière.
+
+Sous `annuite_constante`, toutes les échéances sauf la dernière valent
+`premiere_echeance`. Sous les deux autres méthodes, l'échéance varie à chaque
+période ; le récapitulatif rend donc la première et la dernière.
 
 ## Les invariants
 
@@ -62,11 +83,13 @@ jusqu'à la réponse.
 | Méthode | Chemin | Clé requise | Description |
 |---|---|---|---|
 | `GET` | `/` | non | Index du service |
-| `GET` | `/loans/schedule?capital=&taux=&mois=` | oui | Échéancier à mensualité constante |
+| `GET` | `/loans/schedule?capital=&taux=&mois=&methode=` | oui | Échéancier de prêt |
 | `GET` | `/health` | non | État du service ; `503` si le binaire COBOL manque |
 
 Paramètres : `capital` de 0.01 à 99999999999.99, `taux` nominal annuel en
-pourcent de 0 à 99.999999, `mois` de 1 à 600. Un paramètre invalide rend un
+pourcent de 0 à 99.999999, `mois` de 1 à 600, `methode` parmi les trois
+libellés ci-dessus — les lettres `A`, `C` et `I` sont acceptées comme alias.
+Un paramètre invalide rend un
 `400` nommant le champ fautif ; une clé absente ou invalide un `401` ; un
 dépassement du plafond de requêtes un `429`.
 
@@ -92,22 +115,24 @@ donc en tenir compte avant de se fier au plafond.
 ## Contrat du programme COBOL
 
 Le binaire est autonome et testable sans la couche Go. Il lit sur son entrée
-standard **une ligne de 25 chiffres** — capital `9(11)V99`, taux annuel
-`9(2)V9(6)`, durée `9(4)` — et écrit des enregistrements à largeur fixe :
+standard **une ligne de 26 caractères** — capital `9(11)V99`, taux annuel
+`9(2)V9(6)`, durée `9(4)`, puis la lettre de la méthode (`A`, `C` ou `I`) — et
+écrit des enregistrements à largeur fixe :
 
 ```
-R + échéances 9(4) + mensualité 9(11)V99 + total intérêts 9(13)V99 + total dû 9(13)V99   48 car.
-E + numéro    9(4) + paiement   9(11)V99 + intérêts, capital, solde 9(11)V99             57 car.
+R + échéances 9(4) + première et dernière échéance 9(11)V99
+                   + total intérêts et total dû 9(13)V99                      61 car.
+E + numéro    9(4) + paiement, intérêts, capital, solde 9(11)V99              57 car.
 ```
 
 ```sh
-$ echo "0000025000000034500000240" | ./bin/loan_amortization | head -2
-R02400000000144348000000009643665000000034643665
+$ echo "0000025000000034500000240A" | ./bin/loan_amortization | head -2
+R024000000001443480000000144493000000009643665000000034643665
 E00010000000144348000000007187500000000724730000024927527
 ```
 
 Codes de sortie : `2` si l'entrée est malformée, `3` si le capital ou la durée
-sont nuls.
+sont nuls, `4` si la méthode est inconnue.
 
 **`JSON GENERATE` n'est délibérément pas utilisé.** Le paquet GnuCOBOL des
 distributions est construit avec `JSON library: not found` : l'instruction
@@ -155,8 +180,7 @@ privilégié et n'écrit rien sur disque.
 
 ## Limites connues
 
-- Seule la mensualité constante est implémentée. L'amortissement à capital
-  constant et le prêt in fine ne le sont pas.
+- Les échéances sont mensuelles. Aucune autre périodicité n'est proposée.
 - Le taux périodique est **proportionnel** (taux nominal annuel divisé par
   douze), et non le taux actuariel équivalent. C'est un choix, pas un oubli.
 - Le TAEG n'est pas calculé : il demande une résolution itérative de taux de

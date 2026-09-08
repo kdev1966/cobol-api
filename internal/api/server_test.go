@@ -129,6 +129,7 @@ func TestValidationDesParametres(t *testing.T) {
 		{"/loans/schedule?capital=1000.00&taux=3.45&mois=601", "mois"},
 		{"/loans/schedule?capital=1000.00&taux=3.45&mois=abc", "mois"},
 		{"/loans/schedule", "capital"},
+		{"/loans/schedule?capital=1000&taux=3&mois=12&methode=lineaire", "methode"},
 	}
 
 	for _, c := range cas {
@@ -165,10 +166,12 @@ func TestEcheancierNominal(t *testing.T) {
 			Capital string `json:"capital"`
 			Taux    string `json:"taux"`
 			Mois    int    `json:"mois"`
+			Methode string `json:"methode"`
 		} `json:"demande"`
 		Recapitulatif struct {
-			Echeances  int         `json:"echeances"`
-			Mensualite json.Number `json:"mensualite"`
+			Echeances        int         `json:"echeances"`
+			PremiereEcheance json.Number `json:"premiere_echeance"`
+			DerniereEcheance json.Number `json:"derniere_echeance"`
 		} `json:"recapitulatif"`
 		Echeancier []struct {
 			N        int         `json:"n"`
@@ -188,9 +191,15 @@ func TestEcheancierNominal(t *testing.T) {
 	if len(corps.Echeancier) != 240 || corps.Recapitulatif.Echeances != 240 {
 		t.Errorf("%d echeances, recapitulatif %d", len(corps.Echeancier), corps.Recapitulatif.Echeances)
 	}
+	if corps.Demande.Methode != "annuite_constante" {
+		t.Errorf("methode par defaut %q", corps.Demande.Methode)
+	}
 	// Le montant doit ressortir tel que le COBOL l'a ecrit.
-	if got := corps.Recapitulatif.Mensualite.String(); got != "1443.48" {
-		t.Errorf("mensualite %q, attendu \"1443.48\"", got)
+	if got := corps.Recapitulatif.PremiereEcheance.String(); got != "1443.48" {
+		t.Errorf("premiere echeance %q, attendu \"1443.48\"", got)
+	}
+	if got := corps.Recapitulatif.DerniereEcheance.String(); got != "1444.93" {
+		t.Errorf("derniere echeance %q, attendu \"1444.93\"", got)
 	}
 	if got := corps.Echeancier[239].Paiement.String(); got != "1444.93" {
 		t.Errorf("derniere echeance %q, attendu \"1444.93\"", got)

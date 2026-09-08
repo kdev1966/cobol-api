@@ -51,10 +51,37 @@ func decimalVersEntier(texte string, decimales int) (int64, error) {
 	return valeur, nil
 }
 
-// ParseDemande valide les trois parametres et rend une demande prete a
-// calculer. Les bornes protegent a la fois les PIC du programme COBOL et la
-// taille de la reponse.
-func ParseDemande(capital, taux, mois string) (Demande, error) {
+// MethodeParDefaut est retenue quand le parametre est absent.
+const MethodeParDefaut = "annuite_constante"
+
+// codesMethode associe chaque libelle accepte a la lettre attendue par le
+// programme COBOL. Les lettres seules sont acceptees comme alias.
+var codesMethode = map[string]byte{
+	"annuite_constante": 'A',
+	"capital_constant":  'C',
+	"in_fine":           'I',
+	"A":                 'A',
+	"C":                 'C',
+	"I":                 'I',
+}
+
+// libellesMethode rend la forme canonique renvoyee dans la reponse.
+var libellesMethode = map[byte]string{
+	'A': "annuite_constante",
+	'C': "capital_constant",
+	'I': "in_fine",
+}
+
+// MethodesAcceptees liste les libelles canoniques, pour la documentation et
+// les messages d'erreur.
+func MethodesAcceptees() []string {
+	return []string{"annuite_constante", "capital_constant", "in_fine"}
+}
+
+// ParseDemande valide les parametres et rend une demande prete a calculer.
+// Les bornes protegent a la fois les PIC du programme COBOL et la taille de
+// la reponse.
+func ParseDemande(capital, taux, mois, methode string) (Demande, error) {
 	centimes, err := decimalVersEntier(capital, 2)
 	if err != nil {
 		return Demande{}, &ErreurValidation{"capital", err.Error()}
@@ -82,12 +109,24 @@ func ParseDemande(capital, taux, mois string) (Demande, error) {
 			fmt.Sprintf("doit etre compris entre %d et %d", MoisMin, MoisMax)}
 	}
 
+	methode = strings.TrimSpace(methode)
+	if methode == "" {
+		methode = MethodeParDefaut
+	}
+	code, connue := codesMethode[methode]
+	if !connue {
+		return Demande{}, &ErreurValidation{"methode",
+			"doit valoir " + strings.Join(MethodesAcceptees(), ", ")}
+	}
+
 	return Demande{
 		CapitalCentimes:  centimes,
 		TauxMillioniemes: millioniemes,
+		CodeMethode:      code,
 		Mois:             n,
 		Capital:          formaterEchelle(centimes, 2),
 		Taux:             formaterEchelle(millioniemes, 6),
+		Methode:          libellesMethode[code],
 	}, nil
 }
 
