@@ -1,0 +1,17 @@
+{
+  "name": "cobol-api",
+  "version": "1.0.0",
+  "description": "COBOL API with Node.js and SQLite",
+  "main": "nodejs/server.js",
+  "scripts": {
+    "start": "node nodejs/server.js",
+    "dev": "nodemon nodejs/server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "sqlite3": "^5.1.6"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  }
+}

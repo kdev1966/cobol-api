@@ -1,0 +1,14 @@
+# Node.js dependencies
+node_modules/
+npm-debug.log*
+
+# Environment and sensitive files
+.env
+.env.*
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db

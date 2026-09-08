@@ -1,0 +1,13 @@
+# docker-compose.yml
+
+services:
+  cobol-api:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./cobol:/app/cobol # Fichiers COBOL
+      - ./database:/app/database # Persistance base de données
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
