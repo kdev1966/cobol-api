@@ -10,13 +10,12 @@ set -e
 
 binaire="${1:?usage: fumee-cobol.sh <chemin-du-binaire>}"
 
-# 250 000,00 a 3,45 % sur 240 mois, annuite constante, sans frais ni assurance.
-# Les six chiffres avant les lettres sont le plafond d'usure : nul, donc
-# aucune verification demandee.
-entree="0000025000000034500000240000000000000000000000000000000000000AN"
+# 250 000,000 dinars a 8,5 % sur 240 mois, annuite constante, sans frais,
+# sans assurance et sans verification du taux excessif.
+entree="00000250000000085000000240000000000000000000000000000000000000AN"
 
-# Mensualite 1443,48 : le recapitulatif porte 0240 puis 0000000144348.
-prefixe_attendu="^R02400000000144348"
+# Mensualite 2169,558 DT : le recapitulatif porte 0240 puis 00000002169558.
+prefixe_attendu="^R024000000002169558"
 lignes_attendues=241
 
 sortie=$(mktemp)

@@ -117,7 +117,7 @@ func (s *Serveur) index(w http.ResponseWriter, r *http.Request) {
 		"endpoints": []map[string]any{
 			{
 				"method":              "GET",
-				"path":                "/v1/loans/schedule?capital=&taux=&mois=&methode=&frais_dossier=&frais_garantie=&taux_assurance=&assiette_assurance=&taux_usure=",
+				"path":                "/v1/loans/schedule?capital=&taux=&mois=&methode=&frais_dossier=&frais_garantie=&taux_assurance=&assiette_assurance=&tem=",
 				"auth":                true,
 				"description":         "Echeancier de pret",
 				"methodes":            loan.MethodesAcceptees(),
@@ -173,7 +173,7 @@ func (s *Serveur) echeancier(w http.ResponseWriter, r *http.Request) {
 		FraisGarantie: q.Get("frais_garantie"),
 		TauxAssurance: q.Get("taux_assurance"),
 		Assiette:      q.Get("assiette_assurance"),
-		TauxUsure:     q.Get("taux_usure"),
+		Tem:           q.Get("tem"),
 	})
 	if err != nil {
 		var invalide *loan.ErreurValidation

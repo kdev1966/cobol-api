@@ -76,7 +76,7 @@ func TestBinaireIntrouvableEmpecheLeDemarrage(t *testing.T) {
 
 func TestAuthentification(t *testing.T) {
 	h := serveurDeTest(t, nil)
-	cible := "/v1/loans/schedule?capital=1000.00&taux=3.45&mois=12"
+	cible := "/v1/loans/schedule?capital=1000.000&taux=8.5&mois=12"
 
 	cas := []struct {
 		nom  string
@@ -114,7 +114,7 @@ func TestRoutesOuvertes(t *testing.T) {
 		t.Errorf("POST /v1/loans/schedule : HTTP %d, attendu 404", got)
 	}
 	// L'ancien chemin non versionne ne doit plus repondre.
-	if got := appeler(h, "GET", "/loans/schedule?capital=1000&taux=3&mois=12",
+	if got := appeler(h, "GET", "/loans/schedule?capital=1000&taux=8.5&mois=12",
 		"cle-de-test").Code; got != http.StatusNotFound {
 		t.Errorf("chemin non versionne : HTTP %d, attendu 404", got)
 	}
@@ -127,15 +127,15 @@ func TestValidationDesParametres(t *testing.T) {
 		cible string
 		champ string
 	}{
-		{"/v1/loans/schedule?capital=0&taux=3.45&mois=12", "capital"},
-		{"/v1/loans/schedule?capital=abc&taux=3.45&mois=12", "capital"},
-		{"/v1/loans/schedule?capital=-1000&taux=3.45&mois=12", "capital"},
-		{"/v1/loans/schedule?capital=1000.00&taux=100&mois=12", "taux"},
-		{"/v1/loans/schedule?capital=1000.00&taux=3.45&mois=0", "mois"},
-		{"/v1/loans/schedule?capital=1000.00&taux=3.45&mois=601", "mois"},
-		{"/v1/loans/schedule?capital=1000.00&taux=3.45&mois=abc", "mois"},
+		{"/v1/loans/schedule?capital=0&taux=8.5&mois=12", "capital"},
+		{"/v1/loans/schedule?capital=abc&taux=8.5&mois=12", "capital"},
+		{"/v1/loans/schedule?capital=-1000&taux=8.5&mois=12", "capital"},
+		{"/v1/loans/schedule?capital=1000.000&taux=100&mois=12", "taux"},
+		{"/v1/loans/schedule?capital=1000.000&taux=8.5&mois=0", "mois"},
+		{"/v1/loans/schedule?capital=1000.000&taux=8.5&mois=601", "mois"},
+		{"/v1/loans/schedule?capital=1000.000&taux=8.5&mois=abc", "mois"},
 		{"/v1/loans/schedule", "capital"},
-		{"/v1/loans/schedule?capital=1000&taux=3&mois=12&methode=lineaire", "methode"},
+		{"/v1/loans/schedule?capital=1000&taux=8.5&mois=12&methode=lineaire", "methode"},
 	}
 
 	for _, c := range cas {
@@ -161,7 +161,7 @@ func TestEcheancierNominal(t *testing.T) {
 	h := serveurDeTest(t, nil)
 
 	w := appeler(h, "GET",
-		"/v1/loans/schedule?capital=250000.00&taux=3.45&mois=240", "cle-de-test")
+		"/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240", "cle-de-test")
 	if w.Code != http.StatusOK {
 		t.Fatalf("HTTP %d : %s", w.Code, w.Body.String())
 	}
@@ -180,7 +180,7 @@ func TestEcheancierNominal(t *testing.T) {
 			DerniereMensualite json.Number `json:"derniere_mensualite"`
 			TotalAssurance     json.Number `json:"total_assurance"`
 			TotalFrais         json.Number `json:"total_frais"`
-			Taeg               json.Number `json:"taeg"`
+			Teg                json.Number `json:"teg"`
 		} `json:"recapitulatif"`
 		Echeancier []struct {
 			N          int         `json:"n"`
@@ -195,7 +195,7 @@ func TestEcheancierNominal(t *testing.T) {
 	if corps.Status != "success" {
 		t.Errorf("status %q", corps.Status)
 	}
-	if corps.Demande.Capital != "250000.00" || corps.Demande.Taux != "3.450000" {
+	if corps.Demande.Capital != "250000.000" || corps.Demande.Taux != "8.500000" {
 		t.Errorf("demande relayee : %+v", corps.Demande)
 	}
 	if len(corps.Echeancier) != 240 || corps.Recapitulatif.Echeances != 240 {
@@ -204,15 +204,20 @@ func TestEcheancierNominal(t *testing.T) {
 	if corps.Demande.Methode != "annuite_constante" {
 		t.Errorf("methode par defaut %q", corps.Demande.Methode)
 	}
-	// Le montant doit ressortir tel que le COBOL l'a ecrit.
-	if got := corps.Recapitulatif.PremiereMensualite.String(); got != "1443.48" {
-		t.Errorf("premiere mensualite %q, attendu \"1443.48\"", got)
+	// Les montants doivent ressortir tels que le COBOL les a ecrits, au
+	// millime.
+	if got := corps.Recapitulatif.PremiereMensualite.String(); got != "2169.558" {
+		t.Errorf("premiere mensualite %q, attendu \"2169.558\"", got)
 	}
-	if got := corps.Recapitulatif.DerniereMensualite.String(); got != "1444.93" {
-		t.Errorf("derniere mensualite %q, attendu \"1444.93\"", got)
+	if got := corps.Recapitulatif.DerniereMensualite.String(); got != "2169.614" {
+		t.Errorf("derniere mensualite %q, attendu \"2169.614\"", got)
 	}
-	if got := corps.Echeancier[239].Mensualite.String(); got != "1444.93" {
-		t.Errorf("derniere mensualite %q, attendu \"1444.93\"", got)
+	if got := corps.Echeancier[239].Mensualite.String(); got != "2169.614" {
+		t.Errorf("derniere mensualite %q, attendu \"2169.614\"", got)
+	}
+	// Annualisation proportionnelle : sans frais, le TEG egale le nominal.
+	if got := corps.Recapitulatif.Teg.String(); got != "8.50" {
+		t.Errorf("teg %q, attendu \"8.50\"", got)
 	}
 }
 
@@ -266,7 +271,7 @@ func TestCORSAutoriseUneOrigineListee(t *testing.T) {
 
 func TestLimitationDeDebit(t *testing.T) {
 	h := serveurDeTest(t, func(c *Config) { c.RequetesParMinute = 3 })
-	cible := "/v1/loans/schedule?capital=1000.00&taux=3.45&mois=12"
+	cible := "/v1/loans/schedule?capital=1000.000&taux=8.5&mois=12"
 
 	var ok, trop int
 	for i := 0; i < 6; i++ {
@@ -290,7 +295,7 @@ func TestLimitationDeDebit(t *testing.T) {
 func TestSansCleLesEndpointsSontOuverts(t *testing.T) {
 	h := serveurDeTest(t, func(c *Config) { c.CleAPI = "" })
 
-	got := appeler(h, "GET", "/v1/loans/schedule?capital=1000.00&taux=3.45&mois=12", "").Code
+	got := appeler(h, "GET", "/v1/loans/schedule?capital=1000.000&taux=8.5&mois=12", "").Code
 	if got != http.StatusOK {
 		t.Errorf("HTTP %d, attendu 200 en mode ouvert", got)
 	}
@@ -320,7 +325,7 @@ func TestSpecificationServieEtCoherente(t *testing.T) {
 	for chemin := range spec.Paths {
 		cible := chemin
 		if chemin == "/v1/loans/schedule" {
-			cible += "?capital=1000&taux=3&mois=12"
+			cible += "?capital=1000&taux=8.5&mois=12"
 		}
 		if got := appeler(h, "GET", cible, "cle-de-test").Code; got == http.StatusNotFound {
 			t.Errorf("%s est decrit dans la specification mais rend 404", chemin)
@@ -365,7 +370,7 @@ func TestDelaiDeCalculDepasse(t *testing.T) {
 	}
 
 	w := appeler(s.Handler(), "GET",
-		"/v1/loans/schedule?capital=1000&taux=3&mois=12", "cle-de-test")
+		"/v1/loans/schedule?capital=1000&taux=8.5&mois=12", "cle-de-test")
 	if w.Code != http.StatusGatewayTimeout {
 		t.Errorf("HTTP %d, attendu 504 : %s", w.Code, w.Body.String())
 	}

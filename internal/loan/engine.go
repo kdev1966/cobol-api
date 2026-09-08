@@ -21,20 +21,23 @@ import (
 // Bornes acceptees. Le capital et le taux sont limites par les PIC du
 // programme COBOL ; la duree est bornee plus bas que son PIC 9(4) pour
 // eviter des reponses demesurees.
+// DecimalesMonnaie : le dinar tunisien se divise en mille millimes.
+const DecimalesMonnaie = 3
+
 const (
-	CapitalMin = 1 // en centimes
-	CapitalMax = 9999999999999
+	CapitalMin = 1 // en millimes
+	CapitalMax = 99999999999999
 	TauxMax    = 99999999 // 99.999999 %, en millioniemes
 	MoisMin    = 1
 	MoisMax    = 600
-	// Les frais tiennent dans un PIC 9(9)V99.
-	FraisMax = 99999999999
+	// Les frais tiennent dans un PIC 9(9)V999.
+	FraisMax = 999999999999
 )
 
 // Demande est une demande d'echeancier deja validee.
 type Demande struct {
-	// CapitalCentimes evite tout flottant : les montants restent entiers.
-	CapitalCentimes int64 `json:"-"`
+	// CapitalMillimes evite tout flottant : les montants restent entiers.
+	CapitalMillimes int64 `json:"-"`
 	// TauxMillioniemes porte le taux nominal annuel, 3.45 % valant 3450000.
 	TauxMillioniemes int64 `json:"-"`
 	// CodeMethode et CodeAssiette sont les lettres attendues par le
@@ -42,12 +45,13 @@ type Demande struct {
 	CodeMethode  byte `json:"-"`
 	CodeAssiette byte `json:"-"`
 
-	FraisDossierCentimes  int64 `json:"-"`
-	FraisGarantieCentimes int64 `json:"-"`
+	FraisDossierMillimes  int64 `json:"-"`
+	FraisGarantieMillimes int64 `json:"-"`
 	TauxAssuranceMillion  int64 `json:"-"`
-	// TauxUsureDixMillieme porte le plafond reglementaire, 5.88 % valant
-	// 58800. Zero signifie qu'aucune verification n'est demandee.
-	TauxUsureDixMillieme int64 `json:"-"`
+	// TemCentiemes porte le taux effectif moyen de la categorie de concours,
+	// 10.25 % valant 1025. Zero signifie qu'aucune verification n'est
+	// demandee.
+	TemCentiemes int64 `json:"-"`
 
 	Mois          int    `json:"mois"`
 	Capital       string `json:"capital"`
@@ -57,8 +61,8 @@ type Demande struct {
 	FraisGarantie string `json:"frais_garantie"`
 	TauxAssurance string `json:"taux_assurance"`
 	AssietteAssur string `json:"assiette_assurance"`
-	// TauxUsure est absent de la reponse quand aucun plafond n'est demande.
-	TauxUsure *string `json:"taux_usure,omitempty"`
+	// Tem est absent de la reponse quand aucune verification n'est demandee.
+	Tem *string `json:"tem,omitempty"`
 }
 
 // Format des enregistrements rendus par le programme COBOL. Les positions
@@ -66,8 +70,8 @@ type Demande struct {
 const (
 	tagRecap     = 'R'
 	tagEcheance  = 'E'
-	longRecap    = 124
-	longEcheance = 83
+	longRecap    = 129
+	longEcheance = 89
 )
 
 // Recapitulatif est la premiere ligne rendue par le programme COBOL.
@@ -90,17 +94,18 @@ type Recapitulatif struct {
 	TotalVerse json.Number `json:"total_verse"`
 	// CoutCredit agrege interets, assurance et frais.
 	CoutCredit json.Number `json:"cout_credit"`
-	// Taeg est le taux actuariel annuel qui egalise la valeur actuelle des
-	// versements au montant reellement percu, capital diminue des frais.
-	// Des lors que des frais ou une assurance entrent dans les flux, aucune
-	// formule fermee ne le donne : il est resolu par dichotomie.
-	Taeg json.Number `json:"taeg"`
+	// Teg est le taux effectif global au sens du decret n° 2000-462 : le taux
+	// de periode est resolu par methode actuarielle, puis annualise de facon
+	// proportionnelle, et exprime avec deux decimales. Sans frais ni
+	// assurance il egale le taux nominal.
+	Teg json.Number `json:"teg"`
 
-	// Les trois champs suivants sont nuls quand aucun plafond n'a ete
-	// fourni : le service rend alors le TAEG sans le juger.
-	TauxUsure  *json.Number `json:"taux_usure"`
-	Conforme   *bool        `json:"conforme"`
-	MargeUsure *json.Number `json:"marge_usure"`
+	// Les quatre champs suivants sont nuls quand aucun taux effectif moyen
+	// n'a ete fourni : le service rend alors le TEG sans le juger.
+	Tem      *json.Number `json:"tem"`
+	Seuil    *json.Number `json:"seuil_excessif"`
+	Conforme *bool        `json:"conforme"`
+	Marge    *json.Number `json:"marge"`
 }
 
 // Echeance est une ligne de l'echeancier.
@@ -153,15 +158,15 @@ func NewMoteur(chemin string, delai time.Duration) *Moteur {
 	return &Moteur{Chemin: chemin, Delai: delai}
 }
 
-// ligneEntree rend les 63 caracteres attendus par le programme : capital
-// 9(11)V99, taux 9(2)V9(6), duree 9(4), frais de dossier et de garantie
-// 9(9)V99, taux d'assurance 9(2)V9(6), taux d'usure 9(2)V9(4), puis les
+// ligneEntree rend les 64 caracteres attendus par le programme : capital
+// 9(11)V999, taux 9(2)V9(6), duree 9(4), frais de dossier et de garantie
+// 9(9)V999, taux d'assurance 9(2)V9(6), taux effectif moyen 9(2)V99, puis les
 // lettres de la methode et de l'assiette d'assurance.
 func ligneEntree(d Demande) string {
-	return fmt.Sprintf("%013d%08d%04d%011d%011d%08d%06d%c%c\n",
-		d.CapitalCentimes, d.TauxMillioniemes, d.Mois,
-		d.FraisDossierCentimes, d.FraisGarantieCentimes,
-		d.TauxAssuranceMillion, d.TauxUsureDixMillieme,
+	return fmt.Sprintf("%014d%08d%04d%012d%012d%08d%04d%c%c\n",
+		d.CapitalMillimes, d.TauxMillioniemes, d.Mois,
+		d.FraisDossierMillimes, d.FraisGarantieMillimes,
+		d.TauxAssuranceMillion, d.TemCentiemes,
 		d.CodeMethode, d.CodeAssiette)
 }
 
@@ -214,9 +219,9 @@ func nombre(chiffres string, decimales int) (json.Number, error) {
 	return json.Number(entiere + "." + chiffres[coupe:]), nil
 }
 
-// montant traite les champs monetaires, tous a deux decimales.
+// montant traite les champs monetaires, tous exprimes en millimes.
 func montant(chiffres string) (json.Number, error) {
-	return nombre(chiffres, 2)
+	return nombre(chiffres, DecimalesMonnaie)
 }
 
 func entier(chiffres string) (int, error) {
@@ -285,13 +290,13 @@ func lireRecapitulatif(ligne string, r *Recapitulatif) error {
 		debut int
 		fin   int
 	}{
-		{&r.PremiereMensualite, 5, 18},
-		{&r.DerniereMensualite, 18, 31},
-		{&r.TotalInterets, 31, 46},
-		{&r.TotalAssurance, 46, 61},
-		{&r.TotalFrais, 61, 74},
-		{&r.TotalVerse, 74, 89},
-		{&r.CoutCredit, 89, 104},
+		{&r.PremiereMensualite, 5, 19},
+		{&r.DerniereMensualite, 19, 33},
+		{&r.TotalInterets, 33, 49},
+		{&r.TotalAssurance, 49, 65},
+		{&r.TotalFrais, 65, 79},
+		{&r.TotalVerse, 79, 95},
+		{&r.CoutCredit, 95, 111},
 	}
 	for _, c := range champs {
 		if *c.cible, err = montant(ligne[c.debut:c.fin]); err != nil {
@@ -299,31 +304,35 @@ func lireRecapitulatif(ligne string, r *Recapitulatif) error {
 		}
 	}
 
-	// Le TAEG est un pourcentage a quatre decimales, pas un montant.
-	if r.Taeg, err = nombre(ligne[104:110], 4); err != nil {
+	// Le TEG est un pourcentage a deux decimales, pas un montant.
+	if r.Teg, err = nombre(ligne[111:115], 2); err != nil {
 		return fmt.Errorf("recapitulatif illisible : %w", err)
 	}
 
-	// Le verdict d'usure : "-" quand aucun plafond n'a ete demande, auquel
-	// cas les trois champs restent nuls.
-	switch ligne[116] {
+	// Le verdict : "-" quand aucun taux effectif moyen n'a ete fourni, auquel
+	// cas les quatre champs restent nuls.
+	switch ligne[123] {
 	case '-':
 		return nil
 	case 'O', 'N':
-		conforme := ligne[116] == 'O'
-		usure, err := nombre(ligne[110:116], 4)
+		conforme := ligne[123] == 'O'
+		tem, err := nombre(ligne[115:119], 2)
 		if err != nil {
 			return fmt.Errorf("recapitulatif illisible : %w", err)
 		}
-		marge, err := nombreSigne(ligne[117:124], 4)
+		seuil, err := nombre(ligne[119:123], 2)
 		if err != nil {
 			return fmt.Errorf("recapitulatif illisible : %w", err)
 		}
-		r.TauxUsure, r.Conforme, r.MargeUsure = &usure, &conforme, &marge
+		marge, err := nombreSigne(ligne[124:129], 2)
+		if err != nil {
+			return fmt.Errorf("recapitulatif illisible : %w", err)
+		}
+		r.Tem, r.Seuil, r.Conforme, r.Marge = &tem, &seuil, &conforme, &marge
 		return nil
 	default:
 		return fmt.Errorf("recapitulatif illisible : conformite %q inattendue",
-			ligne[116])
+			ligne[123])
 	}
 }
 
@@ -362,12 +371,12 @@ func lireEcheance(ligne string, e *Echeance) error {
 		debut int
 		fin   int
 	}{
-		{&e.Echeance, 5, 18},
-		{&e.Interets, 18, 31},
-		{&e.Capital, 31, 44},
-		{&e.Assurance, 44, 57},
-		{&e.Mensualite, 57, 70},
-		{&e.Solde, 70, 83},
+		{&e.Echeance, 5, 19},
+		{&e.Interets, 19, 33},
+		{&e.Capital, 33, 47},
+		{&e.Assurance, 47, 61},
+		{&e.Mensualite, 61, 75},
+		{&e.Solde, 75, 89},
 	}
 	for _, c := range champs {
 		if *c.cible, err = montant(ligne[c.debut:c.fin]); err != nil {

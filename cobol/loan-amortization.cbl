@@ -28,23 +28,26 @@
       *>   I  capital initial   : prime constante sur toute la duree
       *>   R  capital restant du : prime decroissante
       *>
-      *> Le taux d'usure est le plafond reglementaire que le TAEG ne doit pas
-      *> depasser. Il est fourni en entree : sa lecture, qui depend d'un
-      *> bareme trimestriel, releve de l'appelant. Ce programme garde la
-      *> regle, comparer et statuer. Un plafond nul signifie qu'aucune
+      *> Les montants sont en millimes : le dinar tunisien se divise en mille,
+      *> d'ou trois decimales sur tous les champs monetaires.
+      *>
+      *> Le taux effectif moyen de la categorie de concours est fourni en
+      *> entree ; sa lecture, qui depend d'un bareme semestriel publie par
+      *> arrete, releve de l'appelant. Ce programme garde la regle legale :
+      *> majorer d'un cinquieme et statuer. Un TEM nul signifie qu'aucune
       *> verification n'est demandee.
       *>
-      *> Entree : une ligne de 63 caracteres sur stdin
-      *>            capital         9(11)V99   positions  1-13
-      *>            taux annuel     9(2)V9(6)  positions 14-21
-      *>            duree mois      9(4)       positions 22-25
-      *>            frais dossier   9(9)V99    positions 26-36
-      *>            frais garantie  9(9)V99    positions 37-47
-      *>            taux assurance  9(2)V9(6)  positions 48-55
-      *>            taux usure      9(2)V9(4)  positions 56-61
+      *> Entree : une ligne de 64 caracteres sur stdin
+      *>            capital         9(11)V999  positions  1-14
+      *>            taux annuel     9(2)V9(6)  positions 15-22
+      *>            duree mois      9(4)       positions 23-26
+      *>            frais dossier   9(9)V999   positions 27-38
+      *>            frais garantie  9(9)V999   positions 39-50
+      *>            taux assurance  9(2)V9(6)  positions 51-58
+      *>            TEM categorie   9(2)V99    positions 59-62
       *>                            (zero = aucune verification)
-      *>            methode         X          position     62
-      *>            assiette assur. X          position     63
+      *>            methode         X          position     63
+      *>            assiette assur. X          position     64
       *>
       *> Sortie : enregistrements a largeur fixe, un par ligne.
       *>          "R" recapitulatif : echeances 9(4), premiere et derniere
@@ -76,19 +79,19 @@
        DATA DIVISION.
        WORKING-STORAGE SECTION.
 
-       01 WS-ENTREE             PIC X(63) VALUE SPACES.
+       01 WS-ENTREE             PIC X(64) VALUE SPACES.
        01 WS-ENTREE-CHAMPS REDEFINES WS-ENTREE.
-          05 WS-E-CHIFFRES      PIC X(61).
+          05 WS-E-CHIFFRES      PIC X(62).
           05 WS-E-METHODE       PIC X.
           05 WS-E-ASSIETTE      PIC X.
        01 WS-E-DETAIL REDEFINES WS-ENTREE.
-          05 WS-E-CAPITAL       PIC 9(11)V99.
+          05 WS-E-CAPITAL       PIC 9(11)V999.
           05 WS-E-TAUX          PIC 9(2)V9(6).
           05 WS-E-DUREE         PIC 9(4).
-          05 WS-E-FRAIS-DOSSIER PIC 9(9)V99.
-          05 WS-E-FRAIS-GARANTIE PIC 9(9)V99.
+          05 WS-E-FRAIS-DOSSIER PIC 9(9)V999.
+          05 WS-E-FRAIS-GARANTIE PIC 9(9)V999.
           05 WS-E-TAUX-ASSUR    PIC 9(2)V9(6).
-          05 WS-E-TAUX-USURE    PIC 9(2)V9(4).
+          05 WS-E-TEM           PIC 9(2)V99.
           05 FILLER             PIC X(2).
 
        78 METHODE-ANNUITE       VALUE "A".
@@ -102,29 +105,29 @@
        78 CONFORME-SANS-OBJET   VALUE "-".
 
        01 WS-CONFORME           PIC X      VALUE "-".
-       01 WS-MARGE              PIC S9(2)V9(4) VALUE 0.
+       01 WS-MARGE              PIC S9(2)V99   VALUE 0.
 
        01 WS-TAUX-MENSUEL       PIC 9V9(18)    VALUE 0.
        01 WS-TAUX-ASSUR-MENSUEL PIC 9V9(18)    VALUE 0.
        01 WS-FACTEUR            PIC 9(9)V9(18) VALUE 0.
-       01 WS-MENSUALITE         PIC 9(11)V99   VALUE 0.
+       01 WS-MENSUALITE         PIC 9(11)V999  VALUE 0.
       *> Part de capital fixe de la methode a capital constant.
-       01 WS-AMORT-FIXE         PIC 9(11)V99   VALUE 0.
-       01 WS-FRAIS              PIC 9(11)V99   VALUE 0.
-       01 WS-VERSE              PIC 9(11)V99   VALUE 0.
+       01 WS-AMORT-FIXE         PIC 9(11)V999  VALUE 0.
+       01 WS-FRAIS              PIC 9(11)V999  VALUE 0.
+       01 WS-VERSE              PIC 9(11)V999  VALUE 0.
 
        01 WS-I                  PIC 9(4)       VALUE 0.
-       01 WS-SOLDE              PIC S9(11)V99  VALUE 0.
-       01 WS-INTERET            PIC 9(11)V99   VALUE 0.
-       01 WS-PART-CAPITAL       PIC 9(11)V99   VALUE 0.
-       01 WS-ECHEANCE           PIC 9(11)V99   VALUE 0.
-       01 WS-ASSURANCE          PIC 9(11)V99   VALUE 0.
-       01 WS-DU                 PIC 9(11)V99   VALUE 0.
+       01 WS-SOLDE              PIC S9(11)V999 VALUE 0.
+       01 WS-INTERET            PIC 9(11)V999  VALUE 0.
+       01 WS-PART-CAPITAL       PIC 9(11)V999  VALUE 0.
+       01 WS-ECHEANCE           PIC 9(11)V999  VALUE 0.
+       01 WS-ASSURANCE          PIC 9(11)V999  VALUE 0.
+       01 WS-DU                 PIC 9(11)V999  VALUE 0.
 
-       01 WS-CUM-INTERET        PIC 9(13)V99   VALUE 0.
-       01 WS-CUM-ASSURANCE      PIC 9(13)V99   VALUE 0.
-       01 WS-CUM-DU             PIC 9(13)V99   VALUE 0.
-       01 WS-COUT-CREDIT        PIC 9(13)V99   VALUE 0.
+       01 WS-CUM-INTERET        PIC 9(13)V999  VALUE 0.
+       01 WS-CUM-ASSURANCE      PIC 9(13)V999  VALUE 0.
+       01 WS-CUM-DU             PIC 9(13)V999  VALUE 0.
+       01 WS-COUT-CREDIT        PIC 9(13)V999  VALUE 0.
 
       *> Duree maximale acceptee, qui dimensionne la table des versements
       *> conservee pour la resolution du TAEG.
@@ -132,7 +135,7 @@
        78 ITERATIONS-TAEG       VALUE 40.
 
        01 WS-VERSEMENTS.
-          05 WS-VERSEMENT       PIC 9(11)V99 OCCURS 600 TIMES.
+          05 WS-VERSEMENT       PIC 9(11)V999 OCCURS 600 TIMES.
 
        01 WS-J                  PIC 9(4)       VALUE 0.
        01 WS-ITER               PIC 9(3)       VALUE 0.
@@ -141,39 +144,41 @@
        01 WS-TAUX-ESSAI         PIC 9V9(18)    VALUE 0.
        01 WS-ESCOMPTE           PIC 9V9(18)    VALUE 0.
        01 WS-VALEUR-ACTUELLE    PIC 9(13)V9(6) VALUE 0.
-       01 WS-TAEG               PIC 9(2)V9(4)  VALUE 0.
+       01 WS-TEG                PIC 9(2)V99    VALUE 0.
+       01 WS-SEUIL              PIC 9(2)V99    VALUE 0.
 
       *> Le deroulement sert deux fois : une passe muette pour totaliser,
       *> une passe emettrice. Un seul corps de boucle, donc une seule
       *> regle de calcul.
        01 WS-EMETTRE            PIC X          VALUE "N".
-       01 WS-PREMIERE           PIC 9(11)V99   VALUE 0.
-       01 WS-DERNIERE           PIC 9(11)V99   VALUE 0.
+       01 WS-PREMIERE           PIC 9(11)V999  VALUE 0.
+       01 WS-DERNIERE           PIC 9(11)V999  VALUE 0.
 
        01 WS-RECAP.
           05 FILLER             PIC X          VALUE "R".
           05 WS-R-ECHEANCES     PIC 9(4)       VALUE 0.
-          05 WS-R-PREMIERE      PIC 9(11)V99   VALUE 0.
-          05 WS-R-DERNIERE      PIC 9(11)V99   VALUE 0.
-          05 WS-R-INTERETS      PIC 9(13)V99   VALUE 0.
-          05 WS-R-ASSURANCE     PIC 9(13)V99   VALUE 0.
-          05 WS-R-FRAIS         PIC 9(11)V99   VALUE 0.
-          05 WS-R-TOTAL-DU      PIC 9(13)V99   VALUE 0.
-          05 WS-R-COUT          PIC 9(13)V99   VALUE 0.
-          05 WS-R-TAEG          PIC 9(2)V9(4)  VALUE 0.
-          05 WS-R-TAUX-USURE    PIC 9(2)V9(4)  VALUE 0.
+          05 WS-R-PREMIERE      PIC 9(11)V999  VALUE 0.
+          05 WS-R-DERNIERE      PIC 9(11)V999  VALUE 0.
+          05 WS-R-INTERETS      PIC 9(13)V999  VALUE 0.
+          05 WS-R-ASSURANCE     PIC 9(13)V999  VALUE 0.
+          05 WS-R-FRAIS         PIC 9(11)V999  VALUE 0.
+          05 WS-R-TOTAL-DU      PIC 9(13)V999  VALUE 0.
+          05 WS-R-COUT          PIC 9(13)V999  VALUE 0.
+          05 WS-R-TEG           PIC 9(2)V99    VALUE 0.
+          05 WS-R-TEM           PIC 9(2)V99    VALUE 0.
+          05 WS-R-SEUIL         PIC 9(2)V99    VALUE 0.
           05 WS-R-CONFORME      PIC X          VALUE "-".
-          05 WS-R-MARGE         PIC S9(2)V9(4) SIGN IS LEADING SEPARATE.
+          05 WS-R-MARGE         PIC S9(2)V99 SIGN IS LEADING SEPARATE.
 
        01 WS-LIGNE.
           05 FILLER             PIC X          VALUE "E".
           05 WS-L-NUMERO        PIC 9(4)       VALUE 0.
-          05 WS-L-ECHEANCE      PIC 9(11)V99   VALUE 0.
-          05 WS-L-INTERETS      PIC 9(11)V99   VALUE 0.
-          05 WS-L-CAPITAL       PIC 9(11)V99   VALUE 0.
-          05 WS-L-ASSURANCE     PIC 9(11)V99   VALUE 0.
-          05 WS-L-DU            PIC 9(11)V99   VALUE 0.
-          05 WS-L-SOLDE         PIC 9(11)V99   VALUE 0.
+          05 WS-L-ECHEANCE      PIC 9(11)V999  VALUE 0.
+          05 WS-L-INTERETS      PIC 9(11)V999  VALUE 0.
+          05 WS-L-CAPITAL       PIC 9(11)V999  VALUE 0.
+          05 WS-L-ASSURANCE     PIC 9(11)V999  VALUE 0.
+          05 WS-L-DU            PIC 9(11)V999  VALUE 0.
+          05 WS-L-SOLDE         PIC 9(11)V999  VALUE 0.
 
        PROCEDURE DIVISION.
 
@@ -183,8 +188,8 @@
 
            MOVE "N" TO WS-EMETTRE
            PERFORM DEROULER-ECHEANCIER
-           PERFORM CALCULER-TAEG
-           PERFORM VERIFIER-TAUX-USURE
+           PERFORM CALCULER-TEG
+           PERFORM VERIFIER-TAUX-EXCESSIF
            PERFORM ECRIRE-RECAPITULATIF
 
            MOVE "O" TO WS-EMETTRE
@@ -351,7 +356,7 @@
       *> recherche en est proche ; 0,25 par mois le majore largement, meme
       *> avec des frais et une assurance. Quarante tours ramenent alors
       *> l'incertitude a 2,3e-13, bien au-dela des quatre decimales rendues.
-       CALCULER-TAEG.
+       CALCULER-TEG.
            MOVE 0 TO WS-TAUX-BAS
            MOVE 0.25 TO WS-TAUX-HAUT
 
@@ -368,9 +373,10 @@
                END-IF
            END-PERFORM
 
-      *> Le taux periodique resolu est ramene a l'annee par capitalisation.
-           COMPUTE WS-TAEG ROUNDED =
-               ((1 + WS-TAUX-ESSAI) ** 12 - 1) * 100.
+      *> Le decret n° 2000-462 impose un taux annuel proportionnel au taux de
+      *> periode : le taux mensuel resolu est multiplie par douze, et non
+      *> capitalise. Le resultat s'exprime avec deux decimales.
+           COMPUTE WS-TEG ROUNDED = WS-TAUX-ESSAI * 12 * 100.
 
        VALEUR-ACTUELLE-DES-VERSEMENTS.
            MOVE 0 TO WS-VALEUR-ACTUELLE
@@ -382,18 +388,28 @@
                    + WS-VERSEMENT(WS-J) * WS-ESCOMPTE
            END-PERFORM.
 
-      *> Le plafond vient de l'appelant. Un plafond nul veut dire qu'aucune
-      *> verification n'est demandee : le TAEG est rendu sans jugement.
-       VERIFIER-TAUX-USURE.
-           IF WS-E-TAUX-USURE = 0
+      *> Loi n° 99-64 du 15 juillet 1999 : est excessif tout pret dont le taux
+      *> effectif global excede de plus du cinquieme le taux effectif moyen
+      *> pratique au semestre precedent pour la meme categorie de concours.
+      *> Le seuil est donc le TEM majore de vingt pour cent, arrondi a deux
+      *> decimales comme les taux publies par arrete.
+      *>
+      *> L'appelant fournit le TEM, qui est une donnee trimestrielle ; la
+      *> regle de majoration et le verdict restent ici. Un TEM nul signifie
+      *> qu'aucune verification n'est demandee.
+       VERIFIER-TAUX-EXCESSIF.
+           IF WS-E-TEM = 0
                MOVE CONFORME-SANS-OBJET TO WS-CONFORME
+               MOVE 0 TO WS-SEUIL
                MOVE 0 TO WS-MARGE
                EXIT PARAGRAPH
            END-IF
 
-      *> Un TAEG egal au plafond reste licite : le depassement est strict.
-           COMPUTE WS-MARGE = WS-E-TAUX-USURE - WS-TAEG
-           IF WS-TAEG > WS-E-TAUX-USURE
+           COMPUTE WS-SEUIL ROUNDED = WS-E-TEM * 12 / 10
+
+      *> « Excede de plus du cinquieme » : un TEG egal au seuil reste licite.
+           COMPUTE WS-MARGE = WS-SEUIL - WS-TEG
+           IF WS-TEG > WS-SEUIL
                MOVE CONFORME-NON TO WS-CONFORME
            ELSE
                MOVE CONFORME-OUI TO WS-CONFORME
@@ -408,8 +424,9 @@
            MOVE WS-FRAIS         TO WS-R-FRAIS
            MOVE WS-CUM-DU        TO WS-R-TOTAL-DU
            MOVE WS-COUT-CREDIT   TO WS-R-COUT
-           MOVE WS-TAEG          TO WS-R-TAEG
-           MOVE WS-E-TAUX-USURE  TO WS-R-TAUX-USURE
+           MOVE WS-TEG           TO WS-R-TEG
+           MOVE WS-E-TEM         TO WS-R-TEM
+           MOVE WS-SEUIL         TO WS-R-SEUIL
            MOVE WS-CONFORME      TO WS-R-CONFORME
            MOVE WS-MARGE         TO WS-R-MARGE
 

@@ -106,24 +106,24 @@ jobs:
       - name: Verifier le cas de reference
         run: |
           reponse=$(curl -sf -H 'X-API-Key: cle-de-ci' \
-            'http://localhost:3000/v1/loans/schedule?capital=250000.00&taux=3.45&mois=240')
-          echo "$reponse" | grep -q '"premiere_mensualite":1443.48'
-          echo "$reponse" | grep -q '"derniere_mensualite":1444.93'
-          echo "$reponse" | grep -q '"total_interets":96436.65'
-          echo "$reponse" | grep -q '"n":240,"echeance":1444.93'
+            'http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240')
+          echo "$reponse" | grep -q '"premiere_mensualite":2169.558'
+          echo "$reponse" | grep -q '"derniere_mensualite":2169.614'
+          echo "$reponse" | grep -q '"total_interets":270693.976'
+          echo "$reponse" | grep -q '"n":240,"echeance":2169.614'
           echo "$reponse" | grep -q '"methode":"annuite_constante"'
 
       # Les deux autres methodes doivent repondre et se distinguer.
       - name: Verifier les methodes capital constant et in fine
         run: |
           lineaire=$(curl -sf -H 'X-API-Key: cle-de-ci' \
-            'http://localhost:3000/v1/loans/schedule?capital=120000.00&taux=4.2&mois=60&methode=capital_constant')
-          echo "$lineaire" | grep -q '"total_interets":12810.00'
+            'http://localhost:3000/v1/loans/schedule?capital=120000.000&taux=11.23&mois=60&methode=capital_constant')
+          echo "$lineaire" | grep -q '"total_interets":34251.500'
 
           in_fine=$(curl -sf -H 'X-API-Key: cle-de-ci' \
-            'http://localhost:3000/v1/loans/schedule?capital=120000.00&taux=4.2&mois=60&methode=in_fine')
-          echo "$in_fine" | grep -q '"total_interets":25200.00'
-          echo "$in_fine" | grep -q '"n":60,"echeance":120420.00'
+            'http://localhost:3000/v1/loans/schedule?capital=120000.000&taux=11.23&mois=60&methode=in_fine')
+          echo "$in_fine" | grep -q '"total_interets":67380.000'
+          echo "$in_fine" | grep -q '"n":60,"echeance":121123.000'
 
       - name: Verifier le refus d'une methode inconnue
         run: |
@@ -135,41 +135,41 @@ jobs:
       # ces valeurs sont recoupees avec une dichotomie independante en Python.
       - name: Verifier les frais et l'assurance
         run: |
-          base='http://localhost:3000/v1/loans/schedule?capital=250000.00&taux=3.45&mois=240'
+          base='http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240'
 
           nu=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base")
-          echo "$nu" | grep -q '"taeg":3.5051'
-          echo "$nu" | grep -q '"total_assurance":0.00'
+          echo "$nu" | grep -q '"teg":8.50'
+          echo "$nu" | grep -q '"total_assurance":0.000'
 
-          frais=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base&frais_dossier=1500.00")
-          echo "$frais" | grep -q '"taeg":3.5752'
-          echo "$frais" | grep -q '"total_frais":1500.00'
+          frais=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base&frais_dossier=1500.000")
+          echo "$frais" | grep -q '"teg":8.58'
+          echo "$frais" | grep -q '"total_frais":1500.000'
 
           assur=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base&taux_assurance=0.36&assiette_assurance=capital_initial")
-          echo "$assur" | grep -q '"taeg":4.1020'
-          echo "$assur" | grep -q '"total_assurance":18000.00'
-          echo "$assur" | grep -q '"assurance":75.00'
+          echo "$assur" | grep -q '"teg":8.97'
+          echo "$assur" | grep -q '"total_assurance":18000.000'
+          echo "$assur" | grep -q '"assurance":75.000'
 
           code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
-            "$base&frais_dossier=999999999.99")
+            "$base&frais_dossier=999999999999.999")
           test "$code" = "400"
 
-      # Un pret licite nu peut devenir usuraire une fois l'assurance integree.
-      - name: Verifier le verdict d'usure
+      # Loi n° 99-64 : seuil = TEM majore d'un cinquieme, depassement strict.
+      - name: Verifier le verdict de taux excessif
         run: |
-          base='http://localhost:3000/v1/loans/schedule?capital=250000.00&taux=3.45&mois=240'
+          base='http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240'
 
           sans=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base")
           echo "$sans" | grep -q '"conforme":null'
 
-          licite=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base&taux_usure=3.9")
+          licite=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base&tem=11.23")
           echo "$licite" | grep -q '"conforme":true'
-          echo "$licite" | grep -q '"marge_usure":0.3949'
+          echo "$licite" | grep -q '"marge":2.25'
 
           usuraire=$(curl -sf -H 'X-API-Key: cle-de-ci' \
-            "$base&taux_usure=3.9&taux_assurance=0.36&assiette_assurance=capital_initial")
+            "$base&tem=11.23&taux_assurance=0.36&assiette_assurance=capital_initial")
           echo "$usuraire" | grep -q '"conforme":false'
-          echo "$usuraire" | grep -q '"marge_usure":-0.2020'
+          echo "$usuraire" | grep -q '"seuil_excessif":13.48'
 
       - name: Verifier la specification OpenAPI
         run: |

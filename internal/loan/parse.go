@@ -17,7 +17,8 @@ func (e *ErreurValidation) Error() string {
 }
 
 // decimalVersEntier convertit une ecriture decimale en entier a l'echelle
-// voulue, sans passer par un flottant. "3.45" avec 6 decimales donne 3450000.
+// voulue, sans passer par un flottant. "3.45" avec 6 decimales donne 3450000,
+// et un montant en dinars devient un entier de millimes.
 func decimalVersEntier(texte string, decimales int) (int64, error) {
 	texte = strings.TrimSpace(texte)
 	if texte == "" {
@@ -116,9 +117,9 @@ type Parametres struct {
 	FraisGarantie string
 	TauxAssurance string
 	Assiette      string
-	// TauxUsure est le plafond reglementaire. Vide ou absent, aucune
-	// verification n'est demandee.
-	TauxUsure string
+	// Tem est le taux effectif moyen publie pour la categorie de concours.
+	// Vide ou absent, aucune verification du taux excessif n'est demandee.
+	Tem string
 }
 
 // montantOuZero convertit un montant facultatif : vide vaut zero.
@@ -126,7 +127,7 @@ func montantOuZero(champ, texte string, max int64) (int64, error) {
 	if strings.TrimSpace(texte) == "" {
 		return 0, nil
 	}
-	valeur, err := decimalVersEntier(texte, 2)
+	valeur, err := decimalVersEntier(texte, DecimalesMonnaie)
 	if err != nil {
 		return 0, &ErreurValidation{champ, err.Error()}
 	}
@@ -138,13 +139,13 @@ func montantOuZero(champ, texte string, max int64) (int64, error) {
 
 func ParseDemande(p Parametres) (Demande, error) {
 	capital, taux, mois, methode := p.Capital, p.Taux, p.Mois, p.Methode
-	centimes, err := decimalVersEntier(capital, 2)
+	millimes, err := decimalVersEntier(capital, DecimalesMonnaie)
 	if err != nil {
 		return Demande{}, &ErreurValidation{"capital", err.Error()}
 	}
-	if centimes < CapitalMin || centimes > CapitalMax {
+	if millimes < CapitalMin || millimes > CapitalMax {
 		return Demande{}, &ErreurValidation{"capital",
-			"doit etre compris entre 0.01 et 99999999999.99"}
+			"doit etre compris entre 0.001 et 99999999999.999 dinars"}
 	}
 
 	millioniemes, err := decimalVersEntier(taux, 6)
@@ -185,7 +186,7 @@ func ParseDemande(p Parametres) (Demande, error) {
 	}
 	// Les frais sont preleves sur ce que l'emprunteur percoit : ils ne
 	// peuvent pas absorber le capital.
-	if fraisDossier+fraisGarantie >= centimes {
+	if fraisDossier+fraisGarantie >= millimes {
 		return Demande{}, &ErreurValidation{"frais_dossier",
 			"les frais ne peuvent pas atteindre le capital emprunte"}
 	}
@@ -218,44 +219,45 @@ func ParseDemande(p Parametres) (Demande, error) {
 			"doit valoir " + strings.Join(AssiettesAcceptees(), ", ")}
 	}
 
-	var tauxUsure int64
-	var tauxUsureAffiche *string
-	if brut := strings.TrimSpace(p.TauxUsure); brut != "" {
-		tauxUsure, err = decimalVersEntier(brut, 4)
+	var tem int64
+	var temAffiche *string
+	if brut := strings.TrimSpace(p.Tem); brut != "" {
+		tem, err = decimalVersEntier(brut, 2)
 		if err != nil {
-			return Demande{}, &ErreurValidation{"taux_usure", err.Error()}
+			return Demande{}, &ErreurValidation{"tem", err.Error()}
 		}
-		// Le champ COBOL est un PIC 9(2)V9(4).
-		if tauxUsure > 999999 {
-			return Demande{}, &ErreurValidation{"taux_usure",
-				"doit etre compris entre 0 et 99.9999"}
+		// Le champ COBOL est un PIC 9(2)V99, et les taux publies par arrete
+		// ont deux decimales.
+		if tem > 9999 {
+			return Demande{}, &ErreurValidation{"tem",
+				"doit etre compris entre 0 et 99.99"}
 		}
-		if tauxUsure == 0 {
-			return Demande{}, &ErreurValidation{"taux_usure",
-				"un plafond nul n'a pas de sens ; omettre le parametre pour ne pas verifier"}
+		if tem == 0 {
+			return Demande{}, &ErreurValidation{"tem",
+				"un taux effectif moyen nul n'a pas de sens ; omettre le parametre pour ne pas verifier"}
 		}
-		affiche := formaterEchelle(tauxUsure, 4)
-		tauxUsureAffiche = &affiche
+		affiche := formaterEchelle(tem, 2)
+		temAffiche = &affiche
 	}
 
 	return Demande{
-		CapitalCentimes:       centimes,
+		CapitalMillimes:       millimes,
 		TauxMillioniemes:      millioniemes,
 		CodeMethode:           code,
 		CodeAssiette:          codeAssiette,
-		FraisDossierCentimes:  fraisDossier,
-		FraisGarantieCentimes: fraisGarantie,
+		FraisDossierMillimes:  fraisDossier,
+		FraisGarantieMillimes: fraisGarantie,
 		TauxAssuranceMillion:  tauxAssurance,
 		Mois:                  n,
-		Capital:               formaterEchelle(centimes, 2),
+		Capital:               formaterEchelle(millimes, DecimalesMonnaie),
 		Taux:                  formaterEchelle(millioniemes, 6),
 		Methode:               libellesMethode[code],
-		FraisDossier:          formaterEchelle(fraisDossier, 2),
-		FraisGarantie:         formaterEchelle(fraisGarantie, 2),
+		FraisDossier:          formaterEchelle(fraisDossier, DecimalesMonnaie),
+		FraisGarantie:         formaterEchelle(fraisGarantie, DecimalesMonnaie),
 		TauxAssurance:         formaterEchelle(tauxAssurance, 6),
 		AssietteAssur:         libellesAssiette[codeAssiette],
-		TauxUsureDixMillieme:  tauxUsure,
-		TauxUsure:             tauxUsureAffiche,
+		TemCentiemes:          tem,
+		Tem:                   temAffiche,
 	}, nil
 }
 

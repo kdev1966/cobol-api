@@ -1,12 +1,16 @@
 # cobol-api
 
-API REST qui expose un moteur d'amortissement de prêt écrit en COBOL.
+API REST qui expose un moteur d'amortissement de prêt écrit en COBOL, conforme
+à la réglementation tunisienne du crédit.
 
 Le partage des rôles est délibéré. Le COBOL fait l'arithmétique parce qu'il la
-fait exactement : `PIC S9(11)V99` stocke des centimes en décimal, là où le
+fait exactement : `PIC S9(11)V999` stocke des millimes en décimal, là où le
 `float64` de Go ou de JavaScript ne peut pas représenter 0,07. Sur un
-échéancier de 240 mensualités, cette dérive devient des centimes qui ne
+échéancier de 240 mensualités, cette dérive devient des millimes qui ne
 réconcilient pas. Go fait le HTTP, la validation et le contrôle d'accès.
+
+**Les montants sont en dinars tunisiens, exprimés au millime** — le dinar se
+divise en mille, pas en cent. Toutes les valeurs portent trois décimales.
 
 ## Démarrage
 
@@ -26,34 +30,35 @@ curl -s -H "X-API-Key: $K" \
 {
   "status": "success",
   "demande": {
-    "capital": "250000.00", "taux": "3.450000", "mois": 240,
+    "capital": "250000.000", "taux": "8.500000", "mois": 240,
     "methode": "annuite_constante",
-    "frais_dossier": "0.00", "frais_garantie": "0.00",
+    "frais_dossier": "0.000", "frais_garantie": "0.000",
     "taux_assurance": "0.000000", "assiette_assurance": "aucune"
   },
   "recapitulatif": {
     "echeances": 240,
-    "premiere_mensualite": 1443.48,
-    "derniere_mensualite": 1444.93,
-    "total_interets": 96436.65,
-    "total_assurance": 0.00,
-    "total_frais": 0.00,
-    "total_verse": 346436.65,
-    "cout_credit": 96436.65,
-    "taeg": 3.5051
+    "premiere_mensualite": 2169.558,
+    "derniere_mensualite": 2169.614,
+    "total_interets": 270693.976,
+    "total_assurance": 0.000,
+    "total_frais": 0.000,
+    "total_verse": 520693.976,
+    "cout_credit": 270693.976,
+    "teg": 8.50,
+    "tem": null, "seuil_excessif": null, "conforme": null, "marge": null
   },
   "echeancier": [
-    { "n": 1, "echeance": 1443.48, "interets": 718.75, "capital": 724.73,
-      "assurance": 0.00, "mensualite": 1443.48, "solde": 249275.27 },
-    { "n": 240, "echeance": 1444.93, "interets": 4.14, "capital": 1440.79,
-      "assurance": 0.00, "mensualite": 1444.93, "solde": 0.00 }
+    { "n": 1, "echeance": 2169.558, "interets": 1770.833, "capital": 398.725,
+      "assurance": 0.000, "mensualite": 2169.558, "solde": 249601.275 },
+    { "n": 240, "echeance": 2169.614, "interets": 15.260, "capital": 2154.354,
+      "assurance": 0.000, "mensualite": 2169.614, "solde": 0.000 }
   ]
 }
 ```
 
-La dernière échéance vaut 1444,93 et non 1443,48 : elle absorbe le résidu
-d'arrondi accumulé sur les 239 mois précédents, comme le veut la pratique
-bancaire.
+La dernière échéance vaut 2 169,614 DT et non 2 169,558 : elle absorbe le
+résidu d'arrondi accumulé sur les 239 mois précédents, comme le veut la
+pratique bancaire.
 
 ## Les trois méthodes
 
@@ -78,64 +83,81 @@ Quatre paramètres facultatifs entrent dans les flux :
 
 | Paramètre | Effet |
 |---|---|
-| `frais_dossier`, `frais_garantie` | Versés au départ. Ils diminuent ce que l'emprunteur perçoit **sans réduire ce qu'il rembourse**, et font donc monter le TAEG. |
+| `frais_dossier`, `frais_garantie` | Versés au départ. Ils diminuent ce que l'emprunteur perçoit **sans réduire ce qu'il rembourse**, et font donc monter le TEG. |
 | `taux_assurance` | Taux annuel de l'assurance emprunteur, en pourcent. |
 | `assiette_assurance` | `capital_initial` — prime constante ; `capital_restant_du` — prime décroissante ; `aucune`. Un taux déclaré sans assiette porte sur le capital initial. |
 
-Sur 250 000 € à 3,45 % sur 240 mois :
+Sur 250 000 DT à 8,5 % sur 240 mois :
 
-| | TAEG | coût du crédit |
+| | TEG | coût du crédit |
 |---|---|---|
-| Nu | 3,5051 % | 96 436,65 € |
-| + 1 500 € de frais de dossier | 3,5752 % | 97 936,65 € |
-| + assurance 0,36 % sur capital initial | 4,1020 % | 114 436,65 € |
-| + 2 400 € de frais et assurance sur capital restant dû | 3,9926 % | 108 899,58 € |
+| Nu | 8,50 % | 270 693,976 DT |
+| + 1 500 DT de frais de dossier | 8,58 % | 272 193,976 DT |
+| + assurance 0,36 % sur capital initial | 8,97 % | 288 693,976 DT |
 
 Chaque ligne de l'échéancier distingue `echeance` (capital + intérêts) de
 `mensualite` (échéance + assurance), ce que l'emprunteur verse réellement.
 
-## Le taux d'usure
+## Le taux excessif
 
-Le taux d'usure est le plafond réglementaire qu'un TAEG ne doit pas dépasser ;
-au-delà, le prêt est usuraire, donc illicite. Passer `taux_usure` fait rendre
-un verdict :
+La [loi n° 99-64 du 15 juillet 1999](https://www.jurisitetunisie.com/tunisie/codes/teg/tie1000.htm)
+définit comme excessif tout prêt dont le TEG **excède de plus du cinquième** le
+taux effectif moyen pratiqué au semestre précédent pour la même catégorie de
+concours. Passer le paramètre `tem` fait rendre un verdict :
 
 ```json
-"taux_usure": 5.88, "conforme": true, "marge_usure": 2.3749
+"tem": 10.25, "seuil_excessif": 12.30, "conforme": true, "marge": 3.80
 ```
 
-Sans ce paramètre, les trois champs sont `null` : le service rend le TAEG sans
-le juger. Un TAEG **égal** au plafond reste licite — le dépassement est strict.
+Le seuil est calculé par le programme COBOL — c'est la règle légale, pas une
+donnée — en majorant le TEM d'un cinquième et en arrondissant à deux décimales.
+Un TEG **égal** au seuil reste licite : le dépassement est strict.
 
-C'est ici que les frais et l'assurance prennent tout leur sens. Sur 250 000 € à
-3,45 % sur 240 mois avec un plafond de 3,9 %, le prêt nu passe à 3,5051 % ;
-avec une assurance à 0,36 % sur le capital initial il monte à 4,1020 % et
-devient **usuraire**. C'est précisément ce que la réglementation vise, et la
-suite de tests le vérifie comme tel.
+Les taux effectifs moyens sont publiés par arrêté du ministre des finances, sur
+proposition de la Banque Centrale de Tunisie, au dernier mois de chaque
+semestre. Le service ne les connaît pas : ils lui sont fournis. Une suite de
+tests vérifie que le calcul du seuil redonne bien les huit valeurs publiées par
+l'arrêté du 28 juillet 2026 :
 
-Le plafond est un paramètre, pas une donnée du service : sa valeur dépend de la
-catégorie de prêt et change chaque trimestre. Le programme COBOL porte la
-règle — comparer, calculer la marge, statuer — et non la donnée.
+| Catégorie | TEM | Seuil |
+|---|---|---|
+| Leasing | 13,37 % | 16,04 % |
+| Découverts | 12,29 % | 14,75 % |
+| Gestion des dettes | 11,78 % | 14,14 % |
+| Crédits à la consommation | 11,23 % | 13,48 % |
+| Crédits logement | 10,25 % | 12,30 % |
+| Crédits à moyen terme | 9,80 % | 11,76 % |
+| Crédits à long terme | 9,63 % | 11,56 % |
+| Crédits à court terme | 9,57 % | 11,48 % |
 
-## Le TAEG
+Sans le paramètre `tem`, les quatre champs sont `null` : le service rend le TEG
+sans le juger.
 
-Le TAEG rendu est le taux actuariel annuel qui égalise la valeur actuelle des
-versements au montant **réellement perçu**, soit le capital diminué des frais.
-Il **n'est pas déduit** du taux nominal : dès que des frais ou une assurance
-entrent dans les flux, aucune formule fermée ne le donne. Et même sans eux, les
-échéances étant arrondies au centime, il faut le résoudre. Le programme
-COBOL le fait par dichotomie sur le taux périodique, en arithmétique décimale
-exacte, puis capitalise sur douze mois.
+## Le TEG
 
-Sur le cas de référence, la dichotomie converge vers 3,505078595 %, soit
-**3,5051 %** à quatre décimales — valeur recoupée avec une résolution
-indépendante en `Decimal` Python sur les mêmes échéances.
+Le TEG est calculé selon le [décret n° 2000-462 du 21 février 2000](https://www.jurisitetunisie.com/tunisie/codes/teg/teg1000.htm),
+qui impose deux choses souvent mal comprises.
 
-En l'absence de frais **et** d'assurance, le TAEG ne dépend que du taux
-nominal : il vaut la même chose pour les trois méthodes d'amortissement. La
-suite de tests le vérifie comme une propriété du domaine. Dès qu'un frais ou
-une prime apparaît, cette propriété tombe — et c'est exactement là que la
-résolution gagne son coût d'une douzaine de millisecondes.
+**L'annualisation est proportionnelle, pas actuarielle.** Le décret parle d'« un
+taux annuel, **proportionnel** au taux d'intérêt de la période » : le taux de
+période est multiplié par le nombre de périodes annuelles, il n'est pas
+capitalisé. Conséquence directe et vérifiable : sans frais ni assurance, le TEG
+**égale exactement le taux nominal**. Un prêt à 8,5 % rend un TEG de 8,50 %.
+
+**Le taux de période, lui, est bien résolu par méthode actuarielle**, en
+égalisant la valeur actuelle de tous les versements dus au montant réellement
+perçu. Le service le résout par dichotomie, en arithmétique décimale exacte,
+puis annualise proportionnellement et arrondit à deux décimales comme l'exige
+le décret.
+
+Entrent dans le calcul les intérêts, frais, commissions et rémunérations de
+toute nature, directs ou indirects. En sont exclus les impôts et droits perçus
+au profit de l'État, et les commissions sans lien avec le crédit.
+
+Dès qu'un frais ou une prime d'assurance entre dans les flux, aucune formule
+fermée ne donne le résultat : sur 250 000 DT à 8,5 % sur 240 mois, le TEG passe
+de 8,50 % à 8,58 % avec 1 500 DT de frais de dossier, et à 8,97 % avec une
+assurance à 0,36 % sur le capital initial.
 
 ## Les invariants
 
@@ -170,7 +192,7 @@ La spécification est **embarquée dans le binaire** et servie telle quelle : el
 est versionnée avec le code qu'elle décrit et ne peut pas en diverger. Un test
 vérifie que chaque chemin qu'elle décrit répond réellement.
 
-Paramètres : `capital` de 0.01 à 99999999999.99, `taux` nominal annuel en
+Paramètres : `capital` de 0.001 à 99999999999.999 dinars, `taux` nominal annuel en
 pourcent de 0 à 99.999999, `mois` de 1 à 600, `methode` parmi les trois
 libellés ci-dessus — les lettres `A`, `C` et `I` sont acceptées comme alias.
 Un paramètre invalide rend un
@@ -192,7 +214,7 @@ plafond parce que le `HEALTHCHECK` du conteneur s'appuie dessus.
 | `CORS_ORIGINS` | vide | Origines navigateur autorisées, séparées par des virgules. Vide = aucune origine croisée. |
 | `PORT` | `3000` | Port d'écoute |
 | `COBOL_PROGRAM_PATH` | `/app/bin/loan_amortization` | Binaire COBOL compilé |
-| `COMPUTE_TIMEOUT_SECONDS` | `5` | Délai maximal d'un calcul. Au-delà, le processus COBOL est tué et la requête rend `504`. Un échéancier de 600 mois avec TAEG prend une vingtaine de millisecondes. |
+| `COMPUTE_TIMEOUT_SECONDS` | `5` | Délai maximal d'un calcul. Au-delà, le processus COBOL est tué et la requête rend `504`. Un échéancier de 600 mois avec résolution du TEG prend une vingtaine de millisecondes. |
 | `APP_ENV` | vide | `production` rend `API_KEY` obligatoire |
 
 Le plafond de débit porte sur l'adresse vue par le serveur. Les en-têtes
@@ -203,31 +225,32 @@ donc en tenir compte avant de se fier au plafond.
 ## Contrat du programme COBOL
 
 Le binaire est autonome et testable sans la couche Go. Il lit sur son entrée
-standard **une ligne de 63 caractères** — capital `9(11)V99`, taux annuel
-`9(2)V9(6)`, durée `9(4)`, frais de dossier et de garantie `9(9)V99`, taux
-d'assurance `9(2)V9(6)`, taux d'usure `9(2)V9(4)`, puis les lettres de la
+standard **une ligne de 64 caractères** — capital `9(11)V999`, taux annuel
+`9(2)V9(6)`, durée `9(4)`, frais de dossier et de garantie `9(9)V999`, taux
+d'assurance `9(2)V9(6)`, taux effectif moyen `9(2)V99`, puis les lettres de la
 méthode (`A`, `C`, `I`) et de l'assiette d'assurance (`N`, `I`, `R`) — et écrit
 des enregistrements à largeur fixe :
 
 ```
-R + échéances 9(4) + première et dernière mensualité 9(11)V99
-                   + total intérêts et total assurance 9(13)V99
-                   + total frais 9(9)V99
-                   + total versé et coût du crédit 9(13)V99
-                   + TAEG et taux d'usure 9(2)V9(4)
-                   + conformité X + marge S9(2)V9(4) à signe séparé           124 car.
+R + échéances 9(4) + première et dernière mensualité 9(11)V999
+                   + total intérêts et total assurance 9(13)V999
+                   + total frais 9(9)V999
+                   + total versé et coût du crédit 9(13)V999
+                   + TEG, TEM et seuil 9(2)V99
+                   + conformité X + marge S9(2)V99 à signe séparé             129 car.
 E + numéro    9(4) + échéance, intérêts, capital, assurance,
-                     mensualité, solde 9(11)V99                               83 car.
+                     mensualité, solde 9(11)V999                               89 car.
 ```
 
 ```sh
-$ echo "0000025000000034500000240000000000000000000000000000000AN" | ./bin/loan_amortization | head -2
-R0240000000014434800000001444930000000096436650000000000000000000000000000000000034643665000000009643665035051
-E0001000000014434800000000718750000000072473000000000000000000001443480000024927527
+$ echo "00000250000000085000000240000000000000000000000000000000000000AN" | ./bin/loan_amortization | head -2
+R02400000000216955800000002169614000000027069397600000000000000000000000000000000000005206939760000000270693976085000000000-+0000
+E0001000000021695580000000177083300000000398725000000000000000000000216955800000249601275
 ```
 
 Codes de sortie : `2` si l'entrée est malformée, `3` si le capital ou la durée
-sont nuls ou la durée supérieure à 600 mois, `4` si la méthode est inconnue.
+sont nuls ou la durée supérieure à 600 mois, `4` si la méthode ou l'assiette
+d'assurance est inconnue.
 
 **`JSON GENERATE` n'est délibérément pas utilisé.** Le paquet GnuCOBOL des
 distributions est construit avec `JSON library: not found` : l'instruction
@@ -295,5 +318,8 @@ privilégié et n'écrit rien sur disque.
 - Le taux périodique est **proportionnel** (taux nominal annuel divisé par
   douze), et non le taux actuariel équivalent. C'est un choix, pas un oubli.
 - Pas d'échéances irrégulières, de différé d'amortissement ni de remboursement anticipé.
-- Le plafond d'usure doit être fourni par l'appelant : le service ne connaît
-  pas le barème trimestriel par catégorie de prêt.
+- Le taux effectif moyen doit être fourni par l'appelant : le service ne
+  connaît pas le barème semestriel publié par arrêté. Il arrive avec la base de
+  données.
+- Les catégories de concours ne sont pas modélisées : l'appelant choisit
+  lui-même le TEM applicable.

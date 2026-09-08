@@ -13,12 +13,12 @@ import (
 // jamais une panique.
 func FuzzLireSortie(f *testing.F) {
 	f.Add("")
-	f.Add("R024000000001443480000000144493000000009643665")
+	f.Add("R0240000000021695580000000216961400000000270693976")
 	f.Add(recap(1, "0000000010000", "0000000010000", "000000000000500", "000000000010500") +
 		"\n" + echeance(1, "0000000010500", "0000000000500", "0000000010000", "0000000000000"))
 	f.Add("libcob: warning: quelque chose\nR\nE\n")
 	f.Add("RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR")
-	f.Add("E00010000000144348000000007187500000000724730000000000000")
+	f.Add("E000100000002169558000000017708330000000039872500000000000000")
 	// Des chiffres a la bonne longueur mais tronques en plein champ.
 	f.Add("R024000000001443480000000144493")
 
@@ -41,7 +41,7 @@ func FuzzLireSortie(f *testing.F) {
 					"mensualite": e.Mensualite.String(),
 					"solde":      e.Solde.String(),
 				} {
-					if _, err := decimalVersEntier(v, 2); err != nil {
+					if _, err := decimalVersEntier(v, DecimalesMonnaie); err != nil {
 						t.Fatalf("%s illisible en sortie : %q", nom, v)
 					}
 				}
@@ -53,17 +53,19 @@ func FuzzLireSortie(f *testing.F) {
 // FuzzDecimalVersEntier eprouve la conversion des parametres de requete, qui
 // recoit directement du texte fourni par le client.
 func FuzzDecimalVersEntier(f *testing.F) {
-	f.Add("250000.00", 2)
+	f.Add("250000.000", 3)
 	f.Add("3.45", 6)
-	f.Add("", 2)
-	f.Add(".", 2)
-	f.Add("...", 2)
-	f.Add("99999999999999999999.99", 2)
-	f.Add("-0", 2)
+	f.Add("10.25", 2)
+	f.Add("", 3)
+	f.Add(".", 3)
+	f.Add("...", 3)
+	f.Add("99999999999999999999.999", 3)
+	f.Add("-0", 3)
 
 	f.Fuzz(func(t *testing.T, texte string, decimales int) {
-		// Les seules echelles employees par le service.
-		if decimales != 2 && decimales != 6 {
+		// Les seules echelles employees par le service : millimes, taux
+		// nominal, taux effectif moyen.
+		if decimales != 2 && decimales != 3 && decimales != 6 {
 			t.Skip()
 		}
 		valeur, err := decimalVersEntier(texte, decimales)

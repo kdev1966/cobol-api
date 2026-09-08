@@ -3,7 +3,7 @@
   "info": {
     "title": "cobol-api",
     "version": "1.0.0",
-    "description": "Moteur d'amortissement de pret ecrit en COBOL, expose en REST.\n\nLes montants sont rendus comme des nombres JSON a deux decimales exactes, produits par une arithmetique decimale a virgule fixe. Ils ne transitent jamais par un flottant binaire.\n\nSix invariants sont tenus : la somme des parts de capital egale exactement le capital emprunte, la somme des echeances egale exactement capital plus interets, le solde apres la derniere echeance est exactement nul, chaque ligne verifie echeance = capital + interets, chaque ligne verifie mensualite = echeance + assurance, et le total verse egale la somme des mensualites. La derniere echeance absorbe le residu d'arrondi.\n\nLe TAEG est le taux actuariel annuel qui egalise la valeur actuelle des versements au montant reellement percu, soit le capital diminue des frais. Des lors que des frais ou une assurance entrent dans les flux, aucune formule fermee ne le donne : il est resolu par dichotomie.",
+    "description": "Moteur d'amortissement de pret ecrit en COBOL, expose en REST, pour le marche tunisien.\n\nLes montants sont en dinars, exprimes au millime : le dinar se divise en mille. Ils sont rendus comme des nombres JSON a trois decimales exactes, produits par une arithmetique decimale a virgule fixe, et ne transitent jamais par un flottant binaire.\n\nSix invariants sont tenus : la somme des parts de capital egale exactement le capital emprunte, la somme des echeances egale exactement capital plus interets, le solde apres la derniere echeance est exactement nul, chaque ligne verifie echeance = capital + interets, chaque ligne verifie mensualite = echeance + assurance, et le total verse egale la somme des mensualites. La derniere echeance absorbe le residu d'arrondi.\n\nLe TEG est calcule selon le decret n° 2000-462 du 21 fevrier 2000 : le taux de periode est resolu par methode actuarielle sur l'ensemble des versements dus, interets, frais, commissions et assurance compris, puis annualise de facon proportionnelle et exprime avec deux decimales. Sans frais ni assurance, il egale le taux nominal.\n\nLe verdict de taux excessif applique la loi n° 99-64 du 15 juillet 1999 : est excessif tout pret dont le TEG excede de plus du cinquieme le taux effectif moyen publie pour la categorie de concours.",
     "license": {
       "name": "Proprietaire"
     }
@@ -122,12 +122,12 @@
             "name": "capital",
             "in": "query",
             "required": true,
-            "description": "Montant emprunte, en unites monetaires, avec au plus deux decimales.",
+            "description": "Montant emprunte en dinars, avec au plus trois decimales (millimes).",
             "schema": {
               "type": "string",
-              "pattern": "^\\d+(\\.\\d{1,2})?$"
+              "pattern": "^\\d+(\\.\\d{1,3})?$"
             },
-            "example": "250000.00"
+            "example": "250000.000"
           },
           {
             "name": "taux",
@@ -138,7 +138,7 @@
               "type": "string",
               "pattern": "^\\d{1,2}(\\.\\d{1,6})?$"
             },
-            "example": "3.45"
+            "example": "8.5"
           },
           {
             "name": "mois",
@@ -174,10 +174,10 @@
             "description": "Frais de dossier, verses au depart. Ils diminuent ce que l'emprunteur percoit sans reduire ce qu'il rembourse, et font donc monter le TAEG.",
             "schema": {
               "type": "string",
-              "pattern": "^\\d+(\\.\\d{1,2})?$",
+              "pattern": "^\\d+(\\.\\d{1,3})?$",
               "default": "0"
             },
-            "example": "1500.00"
+            "example": "1500.000"
           },
           {
             "name": "frais_garantie",
@@ -186,7 +186,7 @@
             "description": "Frais de garantie, verses au depart. Meme traitement que les frais de dossier.",
             "schema": {
               "type": "string",
-              "pattern": "^\\d+(\\.\\d{1,2})?$",
+              "pattern": "^\\d+(\\.\\d{1,3})?$",
               "default": "0"
             }
           },
@@ -218,15 +218,15 @@
             }
           },
           {
-            "name": "taux_usure",
+            "name": "tem",
             "in": "query",
             "required": false,
-            "description": "Plafond reglementaire que le TAEG ne doit pas depasser, en pourcent. Fourni, la reponse porte un verdict de conformite et la marge ; omis, le TAEG est rendu sans jugement. Un TAEG egal au plafond reste licite : le depassement est strict.",
+            "description": "Taux effectif moyen publie par la Banque Centrale de Tunisie pour la categorie de concours, en pourcent. Fourni, la reponse porte un verdict de taux excessif : le seuil est le TEM majore d'un cinquieme, et le depassement est strict. Omis, le TEG est rendu sans jugement.",
             "schema": {
               "type": "string",
-              "pattern": "^\\d{1,2}(\\.\\d{1,4})?$"
+              "pattern": "^\\d{1,2}(\\.\\d{1,2})?$"
             },
-            "example": "5.88"
+            "example": "10.25"
           }
         ],
         "responses": {
@@ -369,11 +369,11 @@
         "properties": {
           "capital": {
             "type": "string",
-            "example": "250000.00"
+            "example": "250000.000"
           },
           "taux": {
             "type": "string",
-            "example": "3.450000"
+            "example": "8.500000"
           },
           "mois": {
             "type": "integer",
@@ -389,11 +389,11 @@
           },
           "frais_dossier": {
             "type": "string",
-            "example": "1500.00"
+            "example": "1500.000"
           },
           "frais_garantie": {
             "type": "string",
-            "example": "900.00"
+            "example": "900.000"
           },
           "taux_assurance": {
             "type": "string",
@@ -407,10 +407,10 @@
               "capital_restant_du"
             ]
           },
-          "taux_usure": {
+          "tem": {
             "type": "string",
-            "description": "Absent quand aucun plafond n'est demande.",
-            "example": "5.8800"
+            "description": "Absent quand aucune verification n'est demandee.",
+            "example": "10.25"
           }
         }
       },
@@ -425,10 +425,11 @@
           "total_frais",
           "total_verse",
           "cout_credit",
-          "taeg",
-          "taux_usure",
+          "teg",
+          "tem",
+          "seuil_excessif",
           "conforme",
-          "marge_usure"
+          "marge"
         ],
         "properties": {
           "echeances": {
@@ -438,64 +439,72 @@
           "premiere_mensualite": {
             "type": "number",
             "description": "Sous annuite_constante et sans assurance sur le capital restant du, toutes les mensualites sauf la derniere valent ce montant.",
-            "example": 1518.48
+            "example": 2169.558
           },
           "derniere_mensualite": {
             "type": "number",
             "description": "Absorbe le residu d'arrondi accumule sur les periodes precedentes.",
-            "example": 1445.36
+            "example": 2169.614
           },
           "total_interets": {
             "type": "number",
-            "example": 96436.65
+            "example": 270693.976
           },
           "total_assurance": {
             "type": "number",
-            "example": 10062.93
+            "example": 0.0
           },
           "total_frais": {
             "type": "number",
             "description": "Somme des frais de dossier et de garantie, verses au depart.",
-            "example": 2400.0
+            "example": 0.0
           },
           "total_verse": {
             "type": "number",
             "description": "Somme des mensualites, frais initiaux exclus.",
-            "example": 356499.58
+            "example": 520693.976
           },
           "cout_credit": {
             "type": "number",
             "description": "Interets, assurance et frais reunis.",
-            "example": 108899.58
-          },
-          "taeg": {
-            "type": "number",
-            "description": "Taux annuel effectif global en pourcent, a quatre decimales, resolu par dichotomie sur les flux reels.",
-            "example": 3.9926
-          },
-          "taux_usure": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "description": "Plafond applique. Nul quand aucune verification n'a ete demandee.",
-            "example": 5.88
+            "example": 270693.976
           },
           "conforme": {
             "type": [
               "boolean",
               "null"
             ],
-            "description": "Vrai si le TAEG ne depasse pas le plafond. Nul quand aucune verification n'a ete demandee.",
+            "description": "Faux si le TEG excede le seuil, auquel cas le pret est usuraire au sens de la loi n° 99-64. Un TEG egal au seuil reste licite.",
             "example": true
           },
-          "marge_usure": {
+          "teg": {
+            "type": "number",
+            "description": "Taux effectif global en pourcent, deux decimales, selon le decret n° 2000-462. Annualisation proportionnelle du taux de periode.",
+            "example": 8.5
+          },
+          "tem": {
             "type": [
               "number",
               "null"
             ],
-            "description": "Plafond moins TAEG, en points de pourcentage. Negatif si le pret est usuraire.",
-            "example": 2.3749
+            "description": "Taux effectif moyen applique. Nul quand aucune verification n'a ete demandee.",
+            "example": 10.25
+          },
+          "seuil_excessif": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Seuil du taux excessif : le TEM majore d'un cinquieme, arrondi a deux decimales. Nul quand aucune verification n'a ete demandee.",
+            "example": 12.3
+          },
+          "marge": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Seuil moins TEG, en points de pourcentage. Negatif si le pret est excessif.",
+            "example": 3.8
           }
         }
       },
@@ -519,29 +528,29 @@
           "echeance": {
             "type": "number",
             "description": "Part de credit : capital + interets.",
-            "example": 1443.48
+            "example": 2169.558
           },
           "interets": {
             "type": "number",
-            "example": 718.75
+            "example": 1770.833
           },
           "capital": {
             "type": "number",
-            "example": 724.73
+            "example": 398.725
           },
           "assurance": {
             "type": "number",
-            "example": 75.0
+            "example": 0.0
           },
           "mensualite": {
             "type": "number",
             "description": "Ce que l'emprunteur verse : echeance + assurance.",
-            "example": 1518.48
+            "example": 2169.558
           },
           "solde": {
             "type": "number",
             "description": "Capital restant du apres cette echeance. Nul apres la derniere.",
-            "example": 249275.27
+            "example": 249601.275
           }
         }
       },
