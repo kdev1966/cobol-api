@@ -1,15 +1,37 @@
 # docker-compose.yml
 
 services:
+  base:
+    image: postgres:17-alpine
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-cobol_api}
+      - POSTGRES_USER=${POSTGRES_USER:-cobol_api}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?definir POSTGRES_PASSWORD, voir .env.example}
+    volumes:
+      - donnees:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cobol_api} -d ${POSTGRES_DB:-cobol_api}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   cobol-api:
     build: .
     ports:
       - "3000:3000"
     environment:
       - APP_ENV=production
-      # Le moteur calcule des echeanciers de credit : sans API_KEY, le
-      # serveur refuse de demarrer en production. Voir .env.example.
+      # Le moteur calcule des echeanciers de credit : sans API_KEY, le serveur
+      # refuse de demarrer en production. Voir .env.example.
       - API_KEY=${API_KEY:-}
       - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-30}
       - CORS_ORIGINS=${CORS_ORIGINS:-}
+      - DATABASE_URL=postgres://${POSTGRES_USER:-cobol_api}:${POSTGRES_PASSWORD}@base:5432/${POSTGRES_DB:-cobol_api}?sslmode=disable
+    depends_on:
+      base:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  donnees:

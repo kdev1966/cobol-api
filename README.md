@@ -16,9 +16,15 @@ divise en mille, pas en cent. Toutes les valeurs portent trois décimales.
 
 ```sh
 cp .env.example .env
-# renseigner API_KEY, par exemple avec : openssl rand -hex 32
+# renseigner API_KEY et POSTGRES_PASSWORD :
+#   openssl rand -hex 32   pour la cle
+#   openssl rand -hex 24   pour le mot de passe
 docker compose up -d --build
 ```
+
+Deux services démarrent : PostgreSQL, qui porte les barèmes réglementaires, et
+l'API. Le service **refuse de démarrer si la base est injoignable** plutôt que
+de répondre à côté, et applique ses migrations au démarrage.
 
 ```sh
 export K=$(grep '^API_KEY=' .env | cut -d= -f2)
@@ -214,6 +220,7 @@ plafond parce que le `HEALTHCHECK` du conteneur s'appuie dessus.
 | `CORS_ORIGINS` | vide | Origines navigateur autorisées, séparées par des virgules. Vide = aucune origine croisée. |
 | `PORT` | `3000` | Port d'écoute |
 | `COBOL_PROGRAM_PATH` | `/app/bin/loan_amortization` | Binaire COBOL compilé |
+| `DATABASE_URL` | — | Adresse PostgreSQL. **Obligatoire** : le service ne démarre pas sans base. |
 | `COMPUTE_TIMEOUT_SECONDS` | `5` | Délai maximal d'un calcul. Au-delà, le processus COBOL est tué et la requête rend `504`. Un échéancier de 600 mois avec résolution du TEG prend une vingtaine de millisecondes. |
 | `APP_ENV` | vide | `production` rend `API_KEY` obligatoire |
 
@@ -269,9 +276,18 @@ go test ./...
 go run ./cmd/cobol-api
 ```
 
-**Attention** : les tests qui ont besoin du binaire COBOL se sautent d'eux-mêmes
-s'il n'a pas été compilé, et `go test` affiche `ok` malgré tout. Sans le
-binaire, 18 tests sur 37 ne s'exécutent pas. La CI le compile toujours.
+**Attention** : les tests qui ont besoin du binaire COBOL ou de PostgreSQL se
+sautent d'eux-mêmes en leur absence, et `go test` affiche `ok` malgré tout.
+Avec les deux, 56 tests s'exécutent ; sans base, 5 se sautent. La CI fournit
+toujours les deux.
+
+Pour une base de test locale :
+
+```sh
+docker run -d --name pg-test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=cobol_api \
+  -p 55432:5432 postgres:17-alpine
+export DATABASE_URL="postgres://postgres:test@localhost:55432/cobol_api?sslmode=disable"
+```
 
 Le lecteur d'enregistrements et la conversion décimale sont couverts par du
 fuzzing, exécuté en CI :
@@ -288,15 +304,40 @@ sautent d'eux-mêmes s'il n'a pas été compilé ; les autres tournent sans lui.
 L'image exécute `go vet`, la suite de tests et un test de fumée sur le binaire
 COBOL pendant sa construction : une régression bloque le build.
 
+## La base de données
+
+PostgreSQL porte les **barèmes réglementaires** : les taux effectifs moyens
+publiés par arrêté, par catégorie de concours et par semestre.
+
+```
+taux_effectifs_moyens (categorie, semestre) -> tem, arrete, publie_le
+```
+
+Le seuil du taux excessif **n'y est pas stocké** : il se déduit du TEM par la
+règle du cinquième, et cette règle appartient au programme COBOL. On ne
+conserve que la donnée publiée, avec la référence de l'arrêté pour la
+traçabilité réglementaire.
+
+Les migrations sont embarquées dans le binaire et appliquées au démarrage, sous
+un verrou consultatif PostgreSQL : plusieurs instances peuvent démarrer en même
+temps sans appliquer deux fois la même migration. Un test le vérifie sur six
+démarrages simultanés.
+
+`/health` sonde réellement la base et rend `503` si elle ne répond pas.
+
 ## Architecture
 
 ```
 cobol/loan-amortization.cbl   règles métier et arithmétique exacte
 internal/loan/                formatage de la demande, appel du binaire, lecture
 internal/api/                 routes, authentification, débit, en-têtes
+internal/db/                  pool, migrations embarquées, barèmes
 cmd/cobol-api/                démarrage et arrêt propre
 internal/api/openapi.json     le contrat, embarqué dans le binaire
 ```
+
+À l'arrêt, les requêtes en vol sont drainées **avant** la fermeture du pool :
+l'inverse les ferait échouer sur la ligne d'arrivée.
 
 Les journaux sont structurés — JSON en production, texte ailleurs — et chaque
 requête achevée est tracée avec son identifiant, son statut et sa durée.
@@ -318,8 +359,6 @@ privilégié et n'écrit rien sur disque.
 - Le taux périodique est **proportionnel** (taux nominal annuel divisé par
   douze), et non le taux actuariel équivalent. C'est un choix, pas un oubli.
 - Pas d'échéances irrégulières, de différé d'amortissement ni de remboursement anticipé.
-- Le taux effectif moyen doit être fourni par l'appelant : le service ne
-  connaît pas le barème semestriel publié par arrêté. Il arrive avec la base de
-  données.
-- Les catégories de concours ne sont pas modélisées : l'appelant choisit
-  lui-même le TEM applicable.
+- Le taux effectif moyen doit encore être fourni par l'appelant. La table des
+  barèmes existe et est peuplée, mais le paramètre `categorie` qui l'exploitera
+  n'est pas encore branché.

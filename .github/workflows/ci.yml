@@ -12,6 +12,23 @@ jobs:
   tests:
     name: Tests et analyse statique
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: cobol_api
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://postgres:ci@localhost:5432/cobol_api?sslmode=disable
     steps:
       - uses: actions/checkout@v4
 
@@ -82,6 +99,21 @@ jobs:
   image:
     name: Image et service
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: cobol_api
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -90,8 +122,10 @@ jobs:
 
       - name: Demarrer le conteneur
         run: |
-          docker run -d --name ci -p 3000:3000 \
+          # Reseau de l'hote : le conteneur doit joindre le PostgreSQL du job.
+          docker run -d --name ci --network host \
             -e API_KEY=cle-de-ci -e RATE_LIMIT_PER_MINUTE=1000 \
+            -e DATABASE_URL='postgres://postgres:ci@localhost:5432/cobol_api?sslmode=disable' \
             cobol-api:ci
           for i in $(seq 1 30); do
             curl -sf localhost:3000/health >/dev/null && exit 0
@@ -193,6 +227,19 @@ jobs:
       - name: Verifier l'identifiant de correlation
         run: |
           curl -sf -D - -o /dev/null http://localhost:3000/health | grep -qi '^x-request-id:'
+
+      # Les migrations doivent s'appliquer au demarrage et la sante refleter
+      # l'etat reel de la base.
+      - name: Verifier la base et ses migrations
+        run: |
+          curl -sf http://localhost:3000/health | grep -q '"databaseReachable":true'
+          n=$(docker exec ci sh -c 'echo' >/dev/null 2>&1; \
+            PGPASSWORD=ci psql -h localhost -U postgres -d cobol_api -tAc \
+            'SELECT count(*) FROM taux_effectifs_moyens')
+          test "$n" = "8"
+          v=$(PGPASSWORD=ci psql -h localhost -U postgres -d cobol_api -tAc \
+            'SELECT count(*) FROM schema_migrations')
+          test "$v" = "2"
 
       - name: Verifier le refus sans cle
         run: |

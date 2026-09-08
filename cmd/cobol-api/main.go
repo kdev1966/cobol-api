@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kdev1966/cobol-api/internal/api"
+	"github.com/kdev1966/cobol-api/internal/db"
 )
 
 func main() {
@@ -26,8 +27,26 @@ func main() {
 	}
 	slog.SetDefault(slog.New(gestionnaire))
 
-	serveur, err := api.NewServeur(cfg)
+	// La base porte les bareme reglementaires : le service ne demarre pas
+	// sans elle, plutot que de repondre a cote.
+	ctxDemarrage, finDemarrage := context.WithTimeout(context.Background(), 30*time.Second)
+	base, err := db.Ouvrir(ctxDemarrage, cfg.DatabaseURL)
 	if err != nil {
+		finDemarrage()
+		slog.Error("erreur d'initialisation", "erreur", err)
+		os.Exit(1)
+	}
+	if err := db.Migrer(ctxDemarrage, base); err != nil {
+		finDemarrage()
+		base.Close()
+		slog.Error("migration de la base", "erreur", err)
+		os.Exit(1)
+	}
+	finDemarrage()
+
+	serveur, err := api.NewServeur(cfg, base)
+	if err != nil {
+		base.Close()
 		slog.Error("erreur d'initialisation", "erreur", err)
 		os.Exit(1)
 	}
@@ -58,8 +77,11 @@ func main() {
 	ctx, annuler := context.WithTimeout(context.Background(), 10*time.Second)
 	defer annuler()
 
+	// Les requetes en vol d'abord, la base ensuite : fermer le pool avant
+	// qu'elles aient fini les ferait echouer sur la ligne d'arrivee.
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("arret force", "erreur", err)
 	}
+	base.Close()
 	slog.Info("serveur arrete")
 }

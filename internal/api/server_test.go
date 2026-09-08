@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/kdev1966/cobol-api/internal/db"
 )
 
 func binaire(t *testing.T) string {
@@ -36,7 +39,7 @@ func serveurDeTest(t *testing.T, ajuster func(*Config)) http.Handler {
 	if ajuster != nil {
 		ajuster(&cfg)
 	}
-	s, err := NewServeur(cfg)
+	s, err := NewServeur(cfg, nil)
 	if err != nil {
 		t.Fatalf("NewServeur : %v", err)
 	}
@@ -58,7 +61,7 @@ func TestProductionExigeUneCle(t *testing.T) {
 		CheminProgramme: binaire(t),
 		CleAPI:          "",
 		Production:      true,
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("le serveur aurait du refuser de demarrer sans API_KEY en production")
 	}
@@ -68,7 +71,7 @@ func TestBinaireIntrouvableEmpecheLeDemarrage(t *testing.T) {
 	_, err := NewServeur(Config{
 		CheminProgramme: "/inexistant/loan_amortization",
 		CleAPI:          "cle",
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("le serveur aurait du refuser de demarrer sans binaire COBOL")
 	}
@@ -364,7 +367,7 @@ func TestDelaiDeCalculDepasse(t *testing.T) {
 		CleAPI:            "cle-de-test",
 		RequetesParMinute: 100,
 		DelaiCalcul:       150 * time.Millisecond,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("NewServeur : %v", err)
 	}
@@ -373,5 +376,87 @@ func TestDelaiDeCalculDepasse(t *testing.T) {
 		"/v1/loans/schedule?capital=1000&taux=8.5&mois=12", "cle-de-test")
 	if w.Code != http.StatusGatewayTimeout {
 		t.Errorf("HTTP %d, attendu 504 : %s", w.Code, w.Body.String())
+	}
+}
+
+// Sans base fournie, /health ne sonde pas la base et n'en parle pas.
+func TestSanteSansBase(t *testing.T) {
+	h := serveurDeTest(t, nil)
+
+	w := appeler(h, "GET", "/health", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d", w.Code)
+	}
+	var corps map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &corps); err != nil {
+		t.Fatalf("reponse illisible : %v", err)
+	}
+	if _, present := corps["databaseReachable"]; present {
+		t.Error("databaseReachable ne devrait pas figurer sans base")
+	}
+	if corps["status"] != "OK" {
+		t.Errorf("status %v", corps["status"])
+	}
+}
+
+// Avec une base, /health la sonde et le dit.
+func TestSanteAvecBase(t *testing.T) {
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		t.Skip("DATABASE_URL absente")
+	}
+	pool, err := db.Ouvrir(context.Background(), url)
+	if err != nil {
+		t.Fatalf("Ouvrir : %v", err)
+	}
+	defer pool.Close()
+
+	s, err := NewServeur(Config{
+		CheminProgramme:   binaire(t),
+		CleAPI:            "cle-de-test",
+		RequetesParMinute: 100,
+	}, pool)
+	if err != nil {
+		t.Fatalf("NewServeur : %v", err)
+	}
+
+	w := appeler(s.Handler(), "GET", "/health", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d : %s", w.Code, w.Body.String())
+	}
+	var corps map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &corps); err != nil {
+		t.Fatalf("reponse illisible : %v", err)
+	}
+	if corps["databaseReachable"] != true {
+		t.Errorf("databaseReachable = %v, attendu true", corps["databaseReachable"])
+	}
+}
+
+// Une base fermee doit rendre 503 : le HEALTHCHECK du conteneur doit voir la
+// panne, pas un OK de facade.
+func TestSanteSignaleUneBaseInjoignable(t *testing.T) {
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		t.Skip("DATABASE_URL absente")
+	}
+	pool, err := db.Ouvrir(context.Background(), url)
+	if err != nil {
+		t.Fatalf("Ouvrir : %v", err)
+	}
+
+	s, err := NewServeur(Config{
+		CheminProgramme:   binaire(t),
+		CleAPI:            "cle-de-test",
+		RequetesParMinute: 100,
+	}, pool)
+	if err != nil {
+		t.Fatalf("NewServeur : %v", err)
+	}
+	pool.Close()
+
+	w := appeler(s.Handler(), "GET", "/health", "")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("HTTP %d, attendu 503 : %s", w.Code, w.Body.String())
 	}
 }

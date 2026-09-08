@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/kdev1966/cobol-api/internal/db"
 	"github.com/kdev1966/cobol-api/internal/loan"
 )
 
@@ -30,6 +32,7 @@ type Config struct {
 	OriginesCORS      []string
 	Production        bool
 	DelaiCalcul       time.Duration
+	DatabaseURL       string
 }
 
 // ConfigDepuisEnv lit la configuration, en appliquant les defauts.
@@ -43,6 +46,7 @@ func ConfigDepuisEnv() Config {
 		Production:        os.Getenv("APP_ENV") == "production",
 		DelaiCalcul: time.Duration(
 			entierOuDefaut("COMPUTE_TIMEOUT_SECONDS", 5)) * time.Second,
+		DatabaseURL: os.Getenv("DATABASE_URL"),
 	}
 }
 
@@ -50,11 +54,14 @@ func ConfigDepuisEnv() Config {
 type Serveur struct {
 	cfg    Config
 	moteur *loan.Moteur
-	mux    *http.ServeMux
+	// base peut etre nil : /health ne sonde alors pas la base. En service
+	// elle est toujours fournie.
+	base *db.Pool
+	mux  *http.ServeMux
 }
 
 // NewServeur verifie la coherence de la configuration puis monte les routes.
-func NewServeur(cfg Config) (*Serveur, error) {
+func NewServeur(cfg Config, base *db.Pool) (*Serveur, error) {
 	if cfg.CleAPI == "" && cfg.Production {
 		return nil, errors.New(
 			"API_KEY est obligatoire en production : /loans/schedule expose un moteur de calcul de credit")
@@ -71,6 +78,7 @@ func NewServeur(cfg Config) (*Serveur, error) {
 	s := &Serveur{
 		cfg:    cfg,
 		moteur: loan.NewMoteur(cfg.CheminProgramme, cfg.DelaiCalcul),
+		base:   base,
 		mux:    http.NewServeMux(),
 	}
 	s.monterRoutes()
@@ -142,24 +150,38 @@ func (s *Serveur) specification(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// sante verifie que le binaire est toujours la. Une reponse inconditionnelle
-// ne servirait a rien au HEALTHCHECK.
+// sante verifie que le binaire et la base repondent. Une reponse
+// inconditionnelle ne servirait a rien au HEALTHCHECK.
 func (s *Serveur) sante(w http.ResponseWriter, r *http.Request) {
 	_, err := os.Stat(s.cfg.CheminProgramme)
-	sain := err == nil
+	programme := err == nil
 
-	code := http.StatusOK
-	etat := "OK"
-	if !sain {
-		code = http.StatusServiceUnavailable
-		etat = "ERROR"
+	corps := map[string]any{
+		"timestamp":     time.Now().UTC().Format(time.RFC3339),
+		"programExists": programme,
+	}
+	sain := programme
+
+	if s.base != nil {
+		ctx, annuler := context.WithTimeout(r.Context(), 2*time.Second)
+		defer annuler()
+		err := s.base.Ping(ctx)
+		if err != nil {
+			slog.Error("health check, base injoignable",
+				"id", IDRequete(r.Context()), "erreur", err)
+		}
+		corps["databaseReachable"] = err == nil
+		sain = sain && err == nil
 	}
 
-	ecrireJSON(w, code, map[string]any{
-		"status":        etat,
-		"timestamp":     time.Now().UTC().Format(time.RFC3339),
-		"programExists": sain,
-	})
+	code := http.StatusOK
+	corps["status"] = "OK"
+	if !sain {
+		code = http.StatusServiceUnavailable
+		corps["status"] = "ERROR"
+	}
+
+	ecrireJSON(w, code, corps)
 }
 
 func (s *Serveur) echeancier(w http.ResponseWriter, r *http.Request) {
