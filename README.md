@@ -19,7 +19,7 @@ docker compose up -d --build
 ```sh
 export K=$(grep '^API_KEY=' .env | cut -d= -f2)
 curl -s -H "X-API-Key: $K" \
-  'http://localhost:3000/loans/schedule?capital=250000.00&taux=3.45&mois=240' | jq
+  'http://localhost:3000/v1/loans/schedule?capital=250000.00&taux=3.45&mois=240' | jq
 ```
 
 ```json
@@ -105,15 +105,26 @@ jusqu'à la réponse.
 | Méthode | Chemin | Clé requise | Description |
 |---|---|---|---|
 | `GET` | `/` | non | Index du service |
-| `GET` | `/loans/schedule?capital=&taux=&mois=&methode=` | oui | Échéancier de prêt |
+| `GET` | `/openapi.json` | non | Spécification OpenAPI 3.1 |
+| `GET` | `/v1/loans/schedule?capital=&taux=&mois=&methode=` | oui | Échéancier de prêt |
 | `GET` | `/health` | non | État du service ; `503` si le binaire COBOL manque |
+
+Les routes métier sont versionnées. Le format du récapitulatif a déjà changé
+une fois ; un client tiers ne doit pas en pâtir au prochain changement.
+
+La spécification est **embarquée dans le binaire** et servie telle quelle : elle
+est versionnée avec le code qu'elle décrit et ne peut pas en diverger. Un test
+vérifie que chaque chemin qu'elle décrit répond réellement.
 
 Paramètres : `capital` de 0.01 à 99999999999.99, `taux` nominal annuel en
 pourcent de 0 à 99.999999, `mois` de 1 à 600, `methode` parmi les trois
 libellés ci-dessus — les lettres `A`, `C` et `I` sont acceptées comme alias.
 Un paramètre invalide rend un
 `400` nommant le champ fautif ; une clé absente ou invalide un `401` ; un
-dépassement du plafond de requêtes un `429`.
+dépassement du plafond de requêtes un `429` ; un calcul qui dépasse son délai
+un `504`.
+
+Chaque réponse porte un `X-Request-Id` que l'on retrouve dans les journaux.
 
 La clé passe dans l'en-tête `X-API-Key`. `/health` reste ouvert et hors
 plafond parce que le `HEALTHCHECK` du conteneur s'appuie dessus.
@@ -127,6 +138,7 @@ plafond parce que le `HEALTHCHECK` du conteneur s'appuie dessus.
 | `CORS_ORIGINS` | vide | Origines navigateur autorisées, séparées par des virgules. Vide = aucune origine croisée. |
 | `PORT` | `3000` | Port d'écoute |
 | `COBOL_PROGRAM_PATH` | `/app/bin/loan_amortization` | Binaire COBOL compilé |
+| `COMPUTE_TIMEOUT_SECONDS` | `5` | Délai maximal d'un calcul. Au-delà, le processus COBOL est tué et la requête rend `504`. Un échéancier de 600 mois avec TAEG prend une vingtaine de millisecondes. |
 | `APP_ENV` | vide | `production` rend `API_KEY` obligatoire |
 
 Le plafond de débit porte sur l'adresse vue par le serveur. Les en-têtes
@@ -174,6 +186,18 @@ go test ./...
 go run ./cmd/cobol-api
 ```
 
+**Attention** : les tests qui ont besoin du binaire COBOL se sautent d'eux-mêmes
+s'il n'a pas été compilé, et `go test` affiche `ok` malgré tout. Sans le
+binaire, 18 tests sur 37 ne s'exécutent pas. La CI le compile toujours.
+
+Le lecteur d'enregistrements et la conversion décimale sont couverts par du
+fuzzing, exécuté en CI :
+
+```sh
+go test ./internal/loan/ -run '^$' -fuzz FuzzLireSortie -fuzztime 60s
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+```
+
 Sans `API_KEY`, le serveur démarre en laissant les endpoints ouverts et le
 signale par un avertissement. Les tests qui ont besoin du binaire COBOL se
 sautent d'eux-mêmes s'il n'a pas été compilé ; les autres tournent sans lui.
@@ -188,7 +212,11 @@ cobol/loan-amortization.cbl   règles métier et arithmétique exacte
 internal/loan/                formatage de la demande, appel du binaire, lecture
 internal/api/                 routes, authentification, débit, en-têtes
 cmd/cobol-api/                démarrage et arrêt propre
+internal/api/openapi.json     le contrat, embarqué dans le binaire
 ```
+
+Les journaux sont structurés — JSON en production, texte ailleurs — et chaque
+requête achevée est tracée avec son identifiant, son statut et sa durée.
 
 Le service lance un processus COBOL par requête. Ce lancement coûte environ
 4,7 ms, contre quelques microsecondes pour le calcul lui-même — mais il achète

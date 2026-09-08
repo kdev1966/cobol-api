@@ -4,7 +4,7 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,11 +15,20 @@ import (
 )
 
 func main() {
+	// Journaux structures : en production au format JSON, pour etre ingerables
+	// tels quels ; en texte ailleurs, pour rester lisibles au terminal.
 	cfg := api.ConfigDepuisEnv()
+	var gestionnaire slog.Handler
+	if cfg.Production {
+		gestionnaire = slog.NewJSONHandler(os.Stderr, nil)
+	} else {
+		gestionnaire = slog.NewTextHandler(os.Stderr, nil)
+	}
+	slog.SetDefault(slog.New(gestionnaire))
 
 	serveur, err := api.NewServeur(cfg)
 	if err != nil {
-		log.Printf("Erreur d'initialisation : %v", err)
+		slog.Error("erreur d'initialisation", "erreur", err)
 		os.Exit(1)
 	}
 
@@ -36,21 +45,21 @@ func main() {
 	signal.Notify(arret, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		log.Printf("Serveur demarre sur le port %s", cfg.Port)
+		slog.Info("serveur demarre", "port", cfg.Port, "production", cfg.Production)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("Erreur du serveur : %v", err)
+			slog.Error("erreur du serveur", "erreur", err)
 			os.Exit(1)
 		}
 	}()
 
 	sig := <-arret
-	log.Printf("%v recu, arret en cours...", sig)
+	slog.Info("signal recu, arret en cours", "signal", sig.String())
 
 	ctx, annuler := context.WithTimeout(context.Background(), 10*time.Second)
 	defer annuler()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Printf("Arret force : %v", err)
+		slog.Error("arret force", "erreur", err)
 	}
-	log.Println("Serveur arrete")
+	slog.Info("serveur arrete")
 }

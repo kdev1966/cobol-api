@@ -3,11 +3,13 @@ package loan
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // binaire rend le chemin du programme COBOL compile, ou saute le test s'il
@@ -162,7 +164,7 @@ func centimes(t *testing.T, n interface{ String() string }) int64 {
 }
 
 func TestInvariantsDeLEcheancier(t *testing.T) {
-	moteur := NewMoteur(binaire(t))
+	moteur := NewMoteur(binaire(t), 0)
 
 	cas := []struct{ capital, taux, mois string }{
 		{"250000.00", "3.45", "240"},
@@ -253,7 +255,7 @@ func verifierInvariants(t *testing.T, moteur *Moteur, capital, taux, mois, metho
 // Chaque methode a une signature propre, verifiee en plus des invariants
 // communs.
 func TestSignatureDeChaqueMethode(t *testing.T) {
-	moteur := NewMoteur(binaire(t))
+	moteur := NewMoteur(binaire(t), 0)
 
 	calculer := func(methode string) *Echeancier {
 		t.Helper()
@@ -307,7 +309,7 @@ func TestSignatureDeChaqueMethode(t *testing.T) {
 	iLin := centimes(t, lineaire.Recapitulatif.TotalInterets)
 	iAnn := centimes(t, annuite.Recapitulatif.TotalInterets)
 	iFin := centimes(t, inFine.Recapitulatif.TotalInterets)
-	if !(iLin < iAnn && iAnn < iFin) {
+	if iLin >= iAnn || iAnn >= iFin {
 		t.Errorf("interets attendus capital_constant < annuite < in_fine, recu %d %d %d",
 			iLin, iAnn, iFin)
 	}
@@ -315,7 +317,7 @@ func TestSignatureDeChaqueMethode(t *testing.T) {
 
 // Cas de reference verifie independamment avec le module decimal de Python.
 func TestCasDeReference(t *testing.T) {
-	moteur := NewMoteur(binaire(t))
+	moteur := NewMoteur(binaire(t), 0)
 
 	d, err := ParseDemande("250000.00", "3.45", "240", "")
 	if err != nil {
@@ -363,7 +365,7 @@ func TestCasDeReference(t *testing.T) {
 // periodique sur douze mois, quelle que soit la maniere dont le capital est
 // amorti. C'est une propriete du domaine, verifiee ici comme telle.
 func TestLeTaegNeDependPasDeLaMethode(t *testing.T) {
-	moteur := NewMoteur(binaire(t))
+	moteur := NewMoteur(binaire(t), 0)
 
 	var reference string
 	for _, methode := range MethodesAcceptees() {
@@ -392,7 +394,7 @@ func TestLeTaegNeDependPasDeLaMethode(t *testing.T) {
 }
 
 func TestLeTaegEstNulSansInterets(t *testing.T) {
-	moteur := NewMoteur(binaire(t))
+	moteur := NewMoteur(binaire(t), 0)
 
 	d, err := ParseDemande("10000.00", "0", "12", "")
 	if err != nil {
@@ -408,7 +410,7 @@ func TestLeTaegEstNulSansInterets(t *testing.T) {
 }
 
 func TestCalculerRemonteLEchecDuProgramme(t *testing.T) {
-	moteur := NewMoteur(binaire(t))
+	moteur := NewMoteur(binaire(t), 0)
 
 	// Capital nul : le programme COBOL doit refuser et sortir en erreur.
 	_, err := moteur.Calculer(context.Background(), Demande{
@@ -419,8 +421,48 @@ func TestCalculerRemonteLEchecDuProgramme(t *testing.T) {
 	}
 }
 
+func TestCalculerAbandonneApresLeDelai(t *testing.T) {
+	chemin, err := filepath.Abs("testdata/lent.sh")
+	if err != nil {
+		t.Fatalf("chemin : %v", err)
+	}
+	if _, err := os.Stat(chemin); err != nil {
+		t.Skip("fixture testdata/lent.sh absente")
+	}
+
+	moteur := NewMoteur(chemin, 150*time.Millisecond)
+	d, err := ParseDemande("1000.00", "3.45", "12", "")
+	if err != nil {
+		t.Fatalf("ParseDemande : %v", err)
+	}
+
+	debut := time.Now()
+	_, err = moteur.Calculer(context.Background(), d)
+	ecoule := time.Since(debut)
+
+	if !errors.Is(err, ErrDelaiDepasse) {
+		t.Fatalf("erreur %v, attendu ErrDelaiDepasse", err)
+	}
+	// Sans WaitDelay, l'appel resterait bloque les trente secondes du script.
+	if ecoule > 3*time.Second {
+		t.Errorf("abandon apres %s, bien au-dela du delai demande", ecoule)
+	}
+}
+
+func TestNewMoteurRetombeSurLeDelaiParDefaut(t *testing.T) {
+	for _, delai := range []time.Duration{0, -time.Second} {
+		if got := NewMoteur("/x", delai).Delai; got != DelaiParDefaut {
+			t.Errorf("NewMoteur(_, %s).Delai = %s, attendu %s",
+				delai, got, DelaiParDefaut)
+		}
+	}
+	if got := NewMoteur("/x", 2*time.Second).Delai; got != 2*time.Second {
+		t.Errorf("un delai explicite doit etre conserve, recu %s", got)
+	}
+}
+
 func TestCalculerAvecUnBinaireIntrouvable(t *testing.T) {
-	moteur := NewMoteur("/inexistant/loan_amortization")
+	moteur := NewMoteur("/inexistant/loan_amortization", 0)
 	d, _ := ParseDemande("1000.00", "3.45", "12", "")
 
 	if _, err := moteur.Calculer(context.Background(), d); err == nil {

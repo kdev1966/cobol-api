@@ -1,9 +1,12 @@
 package api
 
 import (
+	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"log"
+	"encoding/hex"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -149,10 +152,71 @@ func adresseClient(r *http.Request) string {
 	return hote
 }
 
+// cleRequete porte l'identifiant de correlation dans le contexte.
+type cleContexte struct{}
+
+var cleRequete = cleContexte{}
+
+// IDRequete rend l'identifiant de correlation de la requete en cours, ou une
+// chaine vide hors requete.
+func IDRequete(ctx context.Context) string {
+	id, _ := ctx.Value(cleRequete).(string)
+	return id
+}
+
+func nouvelID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "inconnu"
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// reponseObservee retient le code de statut, que net/http ne rend pas
+// autrement une fois la reponse ecrite.
+type reponseObservee struct {
+	http.ResponseWriter
+	code   int
+	octets int
+}
+
+func (o *reponseObservee) WriteHeader(code int) {
+	o.code = code
+	o.ResponseWriter.WriteHeader(code)
+}
+
+func (o *reponseObservee) Write(b []byte) (int, error) {
+	if o.code == 0 {
+		o.code = http.StatusOK
+	}
+	n, err := o.ResponseWriter.Write(b)
+	o.octets += n
+	return n, err
+}
+
+// journal pose un identifiant de correlation, le renvoie au client dans
+// X-Request-Id, et journalise la requete achevee avec son statut et sa duree.
 func journal(suivant http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-		suivant.ServeHTTP(w, r)
+		id := nouvelID()
+		w.Header().Set("X-Request-Id", id)
+		r = r.WithContext(context.WithValue(r.Context(), cleRequete, id))
+
+		debut := time.Now()
+		observee := &reponseObservee{ResponseWriter: w}
+		suivant.ServeHTTP(observee, r)
+
+		if observee.code == 0 {
+			observee.code = http.StatusOK
+		}
+		slog.Info("requete",
+			"id", id,
+			"methode", r.Method,
+			"chemin", r.URL.Path,
+			"statut", observee.code,
+			"duree_ms", float64(time.Since(debut).Microseconds())/1000,
+			"octets", observee.octets,
+		)
 	})
 }
 

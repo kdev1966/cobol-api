@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func binaire(t *testing.T) string {
@@ -75,7 +76,7 @@ func TestBinaireIntrouvableEmpecheLeDemarrage(t *testing.T) {
 
 func TestAuthentification(t *testing.T) {
 	h := serveurDeTest(t, nil)
-	cible := "/loans/schedule?capital=1000.00&taux=3.45&mois=12"
+	cible := "/v1/loans/schedule?capital=1000.00&taux=3.45&mois=12"
 
 	cas := []struct {
 		nom  string
@@ -101,7 +102,7 @@ func TestRoutesOuvertes(t *testing.T) {
 
 	// L'index et la sante restent joignables sans cle : le HEALTHCHECK du
 	// conteneur s'appuie sur /health.
-	for _, cible := range []string{"/", "/health"} {
+	for _, cible := range []string{"/", "/health", "/openapi.json"} {
 		if got := appeler(h, "GET", cible, "").Code; got != http.StatusOK {
 			t.Errorf("%s sans cle : HTTP %d, attendu 200", cible, got)
 		}
@@ -109,8 +110,13 @@ func TestRoutesOuvertes(t *testing.T) {
 	if got := appeler(h, "GET", "/inconnu", "cle-de-test").Code; got != http.StatusNotFound {
 		t.Errorf("/inconnu : HTTP %d, attendu 404", got)
 	}
-	if got := appeler(h, "POST", "/loans/schedule", "cle-de-test").Code; got != http.StatusNotFound {
-		t.Errorf("POST /loans/schedule : HTTP %d, attendu 404", got)
+	if got := appeler(h, "POST", "/v1/loans/schedule", "cle-de-test").Code; got != http.StatusNotFound {
+		t.Errorf("POST /v1/loans/schedule : HTTP %d, attendu 404", got)
+	}
+	// L'ancien chemin non versionne ne doit plus repondre.
+	if got := appeler(h, "GET", "/loans/schedule?capital=1000&taux=3&mois=12",
+		"cle-de-test").Code; got != http.StatusNotFound {
+		t.Errorf("chemin non versionne : HTTP %d, attendu 404", got)
 	}
 }
 
@@ -121,15 +127,15 @@ func TestValidationDesParametres(t *testing.T) {
 		cible string
 		champ string
 	}{
-		{"/loans/schedule?capital=0&taux=3.45&mois=12", "capital"},
-		{"/loans/schedule?capital=abc&taux=3.45&mois=12", "capital"},
-		{"/loans/schedule?capital=-1000&taux=3.45&mois=12", "capital"},
-		{"/loans/schedule?capital=1000.00&taux=100&mois=12", "taux"},
-		{"/loans/schedule?capital=1000.00&taux=3.45&mois=0", "mois"},
-		{"/loans/schedule?capital=1000.00&taux=3.45&mois=601", "mois"},
-		{"/loans/schedule?capital=1000.00&taux=3.45&mois=abc", "mois"},
-		{"/loans/schedule", "capital"},
-		{"/loans/schedule?capital=1000&taux=3&mois=12&methode=lineaire", "methode"},
+		{"/v1/loans/schedule?capital=0&taux=3.45&mois=12", "capital"},
+		{"/v1/loans/schedule?capital=abc&taux=3.45&mois=12", "capital"},
+		{"/v1/loans/schedule?capital=-1000&taux=3.45&mois=12", "capital"},
+		{"/v1/loans/schedule?capital=1000.00&taux=100&mois=12", "taux"},
+		{"/v1/loans/schedule?capital=1000.00&taux=3.45&mois=0", "mois"},
+		{"/v1/loans/schedule?capital=1000.00&taux=3.45&mois=601", "mois"},
+		{"/v1/loans/schedule?capital=1000.00&taux=3.45&mois=abc", "mois"},
+		{"/v1/loans/schedule", "capital"},
+		{"/v1/loans/schedule?capital=1000&taux=3&mois=12&methode=lineaire", "methode"},
 	}
 
 	for _, c := range cas {
@@ -155,7 +161,7 @@ func TestEcheancierNominal(t *testing.T) {
 	h := serveurDeTest(t, nil)
 
 	w := appeler(h, "GET",
-		"/loans/schedule?capital=250000.00&taux=3.45&mois=240", "cle-de-test")
+		"/v1/loans/schedule?capital=250000.00&taux=3.45&mois=240", "cle-de-test")
 	if w.Code != http.StatusOK {
 		t.Fatalf("HTTP %d : %s", w.Code, w.Body.String())
 	}
@@ -256,7 +262,7 @@ func TestCORSAutoriseUneOrigineListee(t *testing.T) {
 
 func TestLimitationDeDebit(t *testing.T) {
 	h := serveurDeTest(t, func(c *Config) { c.RequetesParMinute = 3 })
-	cible := "/loans/schedule?capital=1000.00&taux=3.45&mois=12"
+	cible := "/v1/loans/schedule?capital=1000.00&taux=3.45&mois=12"
 
 	var ok, trop int
 	for i := 0; i < 6; i++ {
@@ -280,8 +286,83 @@ func TestLimitationDeDebit(t *testing.T) {
 func TestSansCleLesEndpointsSontOuverts(t *testing.T) {
 	h := serveurDeTest(t, func(c *Config) { c.CleAPI = "" })
 
-	got := appeler(h, "GET", "/loans/schedule?capital=1000.00&taux=3.45&mois=12", "").Code
+	got := appeler(h, "GET", "/v1/loans/schedule?capital=1000.00&taux=3.45&mois=12", "").Code
 	if got != http.StatusOK {
 		t.Errorf("HTTP %d, attendu 200 en mode ouvert", got)
+	}
+}
+
+func TestSpecificationServieEtCoherente(t *testing.T) {
+	h := serveurDeTest(t, nil)
+
+	w := appeler(h, "GET", "/openapi.json", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d", w.Code)
+	}
+
+	var spec struct {
+		OpenAPI string                    `json:"openapi"`
+		Paths   map[string]map[string]any `json:"paths"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &spec); err != nil {
+		t.Fatalf("specification illisible : %v", err)
+	}
+	if spec.OpenAPI == "" {
+		t.Error("champ openapi absent")
+	}
+
+	// Chaque chemin decrit doit repondre autre chose qu'un 404 : la
+	// specification et les routes ne peuvent pas diverger en silence.
+	for chemin := range spec.Paths {
+		cible := chemin
+		if chemin == "/v1/loans/schedule" {
+			cible += "?capital=1000&taux=3&mois=12"
+		}
+		if got := appeler(h, "GET", cible, "cle-de-test").Code; got == http.StatusNotFound {
+			t.Errorf("%s est decrit dans la specification mais rend 404", chemin)
+		}
+	}
+}
+
+func TestIdentifiantDeCorrelation(t *testing.T) {
+	h := serveurDeTest(t, nil)
+
+	premiere := appeler(h, "GET", "/health", "")
+	seconde := appeler(h, "GET", "/health", "")
+
+	id := premiere.Header().Get("X-Request-Id")
+	if id == "" {
+		t.Fatal("X-Request-Id absent de la reponse")
+	}
+	if autre := seconde.Header().Get("X-Request-Id"); autre == id {
+		t.Errorf("deux requetes portent le meme identifiant : %s", id)
+	}
+}
+
+func TestDelaiDeCalculDepasse(t *testing.T) {
+	// Un programme qui ne rend jamais la main doit produire un 504, pas un
+	// 500 ni une requete qui pend.
+	lent, err := filepath.Abs("../loan/testdata/lent.sh")
+	if err != nil {
+		t.Fatalf("chemin : %v", err)
+	}
+	if _, err := os.Stat(lent); err != nil {
+		t.Skip("fixture lent.sh absente")
+	}
+
+	s, err := NewServeur(Config{
+		CheminProgramme:   lent,
+		CleAPI:            "cle-de-test",
+		RequetesParMinute: 100,
+		DelaiCalcul:       150 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewServeur : %v", err)
+	}
+
+	w := appeler(s.Handler(), "GET",
+		"/v1/loans/schedule?capital=1000&taux=3&mois=12", "cle-de-test")
+	if w.Code != http.StatusGatewayTimeout {
+		t.Errorf("HTTP %d, attendu 504 : %s", w.Code, w.Body.String())
 	}
 }

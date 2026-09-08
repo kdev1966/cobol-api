@@ -2,9 +2,10 @@
 package api
 
 import (
+	_ "embed"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -12,6 +13,13 @@ import (
 
 	"github.com/kdev1966/cobol-api/internal/loan"
 )
+
+// specificationOpenAPI est embarquee dans le binaire : la specification est
+// versionnee avec le code qu'elle decrit, et ne peut pas en diverger a
+// l'execution.
+//
+//go:embed openapi.json
+var specificationOpenAPI []byte
 
 // Config rassemble ce que le service lit dans son environnement.
 type Config struct {
@@ -21,6 +29,7 @@ type Config struct {
 	RequetesParMinute int
 	OriginesCORS      []string
 	Production        bool
+	DelaiCalcul       time.Duration
 }
 
 // ConfigDepuisEnv lit la configuration, en appliquant les defauts.
@@ -32,6 +41,8 @@ func ConfigDepuisEnv() Config {
 		RequetesParMinute: entierOuDefaut("RATE_LIMIT_PER_MINUTE", 30),
 		OriginesCORS:      origines(os.Getenv("CORS_ORIGINS")),
 		Production:        os.Getenv("APP_ENV") == "production",
+		DelaiCalcul: time.Duration(
+			entierOuDefaut("COMPUTE_TIMEOUT_SECONDS", 5)) * time.Second,
 	}
 }
 
@@ -49,7 +60,8 @@ func NewServeur(cfg Config) (*Serveur, error) {
 			"API_KEY est obligatoire en production : /loans/schedule expose un moteur de calcul de credit")
 	}
 	if cfg.CleAPI == "" {
-		log.Println("API_KEY absente : les endpoints proteges sont ouverts. Ne pas exploiter ainsi hors developpement.")
+		slog.Warn("API_KEY absente : les endpoints proteges sont ouverts, " +
+			"ne pas exploiter ainsi hors developpement")
 	}
 	if _, err := os.Stat(cfg.CheminProgramme); err != nil {
 		return nil, errors.New("binaire COBOL introuvable : " + cfg.CheminProgramme +
@@ -58,7 +70,7 @@ func NewServeur(cfg Config) (*Serveur, error) {
 
 	s := &Serveur{
 		cfg:    cfg,
-		moteur: loan.NewMoteur(cfg.CheminProgramme),
+		moteur: loan.NewMoteur(cfg.CheminProgramme, cfg.DelaiCalcul),
 		mux:    http.NewServeMux(),
 	}
 	s.monterRoutes()
@@ -72,10 +84,15 @@ func (s *Serveur) monterRoutes() {
 	}
 
 	// /health reste ouvert et hors plafond : le HEALTHCHECK du conteneur
-	// s'appuie dessus.
+	// s'appuie dessus. L'index et la specification le sont aussi : ils ne
+	// divulguent rien de plus que le README.
 	s.mux.Handle("GET /health", http.HandlerFunc(s.sante))
 	s.mux.Handle("GET /{$}", http.HandlerFunc(s.index))
-	s.mux.Handle("GET /loans/schedule", protege(s.echeancier))
+	s.mux.Handle("GET /openapi.json", http.HandlerFunc(s.specification))
+
+	// Les routes metier sont versionnees : le format du recapitulatif a
+	// deja change une fois, et un client tiers ne doit pas en patir.
+	s.mux.Handle("GET /v1/loans/schedule", protege(s.echeancier))
 	s.mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ecrireErreur(w, http.StatusNotFound, "Ressource inconnue")
 	}))
@@ -95,10 +112,12 @@ func (s *Serveur) index(w http.ResponseWriter, r *http.Request) {
 		"service":        "cobol-api",
 		"description":    "Moteur d'amortissement de pret ecrit en COBOL, expose en REST",
 		"authentication": "En-tete X-API-Key sur les endpoints marques auth",
+		"version":        "v1",
+		"openapi":        "/openapi.json",
 		"endpoints": []map[string]any{
 			{
 				"method":             "GET",
-				"path":               "/loans/schedule?capital=&taux=&mois=&methode=",
+				"path":               "/v1/loans/schedule?capital=&taux=&mois=&methode=",
 				"auth":               true,
 				"description":        "Echeancier de pret",
 				"methodes":           loan.MethodesAcceptees(),
@@ -112,6 +131,14 @@ func (s *Serveur) index(w http.ResponseWriter, r *http.Request) {
 			},
 		},
 	})
+}
+
+func (s *Serveur) specification(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(specificationOpenAPI); err != nil {
+		slog.Error("ecriture de la specification", "erreur", err)
+	}
 }
 
 // sante verifie que le binaire est toujours la. Une reponse inconditionnelle
@@ -156,7 +183,12 @@ func (s *Serveur) echeancier(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Le detail reste dans les journaux : il porte des chemins absolus
 		// et la sortie d'erreur du programme.
-		log.Printf("calcul de l'echeancier : %v", err)
+		slog.Error("calcul de l'echeancier",
+			"id", IDRequete(r.Context()), "erreur", err)
+		if errors.Is(err, loan.ErrDelaiDepasse) {
+			ecrireErreur(w, http.StatusGatewayTimeout, "Le calcul a depasse son delai")
+			return
+		}
 		ecrireErreur(w, http.StatusInternalServerError, "Erreur interne")
 		return
 	}
@@ -173,7 +205,7 @@ func ecrireJSON(w http.ResponseWriter, code int, corps any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
 	if err := json.NewEncoder(w).Encode(corps); err != nil {
-		log.Printf("ecriture de la reponse : %v", err)
+		slog.Error("ecriture de la reponse", "erreur", err)
 	}
 }
 

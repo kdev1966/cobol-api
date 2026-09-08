@@ -55,6 +55,29 @@ jobs:
       - name: go test
         run: go test -race ./...
 
+      # Le lecteur d'enregistrements decoupe positionnellement la sortie d'un
+      # sous-processus : c'est la que le fuzzing trouve ce que les tests
+      # ecrits a la main n'atteignent pas.
+      - name: Fuzzing du lecteur
+        run: |
+          go test ./internal/loan/ -run '^$' -fuzz FuzzLireSortie -fuzztime 60s
+          go test ./internal/loan/ -run '^$' -fuzz FuzzDecimalVersEntier -fuzztime 30s
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  lint:
+    name: Analyse statique approfondie
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
   image:
     name: Image et service
     runs-on: ubuntu-latest
@@ -82,7 +105,7 @@ jobs:
       - name: Verifier le cas de reference
         run: |
           reponse=$(curl -sf -H 'X-API-Key: cle-de-ci' \
-            'http://localhost:3000/loans/schedule?capital=250000.00&taux=3.45&mois=240')
+            'http://localhost:3000/v1/loans/schedule?capital=250000.00&taux=3.45&mois=240')
           echo "$reponse" | grep -q '"premiere_echeance":1443.48'
           echo "$reponse" | grep -q '"derniere_echeance":1444.93'
           echo "$reponse" | grep -q '"total_interets":96436.65'
@@ -93,30 +116,44 @@ jobs:
       - name: Verifier les methodes capital constant et in fine
         run: |
           lineaire=$(curl -sf -H 'X-API-Key: cle-de-ci' \
-            'http://localhost:3000/loans/schedule?capital=120000.00&taux=4.2&mois=60&methode=capital_constant')
+            'http://localhost:3000/v1/loans/schedule?capital=120000.00&taux=4.2&mois=60&methode=capital_constant')
           echo "$lineaire" | grep -q '"total_interets":12810.00'
 
           in_fine=$(curl -sf -H 'X-API-Key: cle-de-ci' \
-            'http://localhost:3000/loans/schedule?capital=120000.00&taux=4.2&mois=60&methode=in_fine')
+            'http://localhost:3000/v1/loans/schedule?capital=120000.00&taux=4.2&mois=60&methode=in_fine')
           echo "$in_fine" | grep -q '"total_interets":25200.00'
           echo "$in_fine" | grep -q '"n":60,"paiement":120420.00'
 
       - name: Verifier le refus d'une methode inconnue
         run: |
           code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
-            'http://localhost:3000/loans/schedule?capital=1000&taux=3&mois=12&methode=lineaire')
+            'http://localhost:3000/v1/loans/schedule?capital=1000&taux=3&mois=12&methode=lineaire')
           test "$code" = "400"
+
+      - name: Verifier la specification OpenAPI
+        run: |
+          spec=$(curl -sf http://localhost:3000/openapi.json)
+          echo "$spec" | grep -q '"openapi"'
+          echo "$spec" | grep -q '/v1/loans/schedule'
+          # Le chemin non versionne ne doit plus repondre.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/loans/schedule?capital=1000&taux=3&mois=12')
+          test "$code" = "404"
+
+      - name: Verifier l'identifiant de correlation
+        run: |
+          curl -sf -D - -o /dev/null http://localhost:3000/health | grep -qi '^x-request-id:'
 
       - name: Verifier le refus sans cle
         run: |
           code=$(curl -s -o /dev/null -w '%{http_code}' \
-            'http://localhost:3000/loans/schedule?capital=1000&taux=3&mois=12')
+            'http://localhost:3000/v1/loans/schedule?capital=1000&taux=3&mois=12')
           test "$code" = "401"
 
       - name: Verifier le refus d'un parametre hors bornes
         run: |
           code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
-            'http://localhost:3000/loans/schedule?capital=0&taux=3&mois=12')
+            'http://localhost:3000/v1/loans/schedule?capital=0&taux=3&mois=12')
           test "$code" = "400"
 
       - name: Journaux du conteneur en cas d'echec

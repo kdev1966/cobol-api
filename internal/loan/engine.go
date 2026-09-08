@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Bornes acceptees. Le capital et le taux sont limites par les PIC du
@@ -91,14 +92,32 @@ type Echeancier struct {
 // ErrProgramme signale un echec du programme COBOL lui-meme.
 var ErrProgramme = errors.New("le programme COBOL a echoue")
 
+// ErrDelaiDepasse signale que le programme n'a pas rendu la main a temps.
+var ErrDelaiDepasse = errors.New("le programme COBOL a depasse son delai")
+
+// DelaiParDefaut borne un calcul. Un echeancier de 600 mois avec la
+// resolution du TAEG prend une vingtaine de millisecondes ; cinq secondes
+// laissent une marge considerable tout en garantissant qu'un processus bloque
+// ne retient ni goroutine ni descripteur.
+const DelaiParDefaut = 5 * time.Second
+
+// delaiAvantArret laisse au processus le temps de sortir apres l'annulation,
+// avant que Wait ne rende la main sans lui.
+const delaiAvantArret = 2 * time.Second
+
 // Moteur lance le binaire COBOL.
 type Moteur struct {
 	Chemin string
+	Delai  time.Duration
 }
 
-// NewMoteur rend un moteur qui appellera le binaire situe a chemin.
-func NewMoteur(chemin string) *Moteur {
-	return &Moteur{Chemin: chemin}
+// NewMoteur rend un moteur qui appellera le binaire situe a chemin. Un delai
+// nul ou negatif retombe sur DelaiParDefaut.
+func NewMoteur(chemin string, delai time.Duration) *Moteur {
+	if delai <= 0 {
+		delai = DelaiParDefaut
+	}
+	return &Moteur{Chemin: chemin, Delai: delai}
 }
 
 // ligneEntree rend les 26 caracteres attendus par le programme : capital
@@ -110,7 +129,13 @@ func ligneEntree(d Demande) string {
 
 // Calculer produit l'echeancier de la demande.
 func (m *Moteur) Calculer(ctx context.Context, d Demande) (*Echeancier, error) {
+	ctx, annuler := context.WithTimeout(ctx, m.Delai)
+	defer annuler()
+
 	cmd := exec.CommandContext(ctx, m.Chemin)
+	// Sans WaitDelay, un processus qui ignore le signal d'arret retiendrait
+	// Wait indefiniment, et avec lui la goroutine de la requete.
+	cmd.WaitDelay = delaiAvantArret
 	cmd.Stdin = strings.NewReader(ligneEntree(d))
 
 	var sortie, erreurs bytes.Buffer
@@ -118,6 +143,9 @@ func (m *Moteur) Calculer(ctx context.Context, d Demande) (*Echeancier, error) {
 	cmd.Stderr = &erreurs
 
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("%w apres %s", ErrDelaiDepasse, m.Delai)
+		}
 		detail := strings.TrimSpace(erreurs.String())
 		if detail == "" {
 			detail = err.Error()
