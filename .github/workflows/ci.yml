@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Tests et analyse statique
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Installer GnuCOBOL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gnucobol
+
+      - name: Compiler le programme COBOL
+        run: |
+          mkdir -p bin
+          cobc -x -free cobol/loan-amortization.cbl -o bin/loan_amortization
+
+      # Le meme test de fumee que dans l'image : la mensualite de reference et
+      # le nombre de lignes sont un contrat.
+      - name: Test de fumee du binaire COBOL
+        run: |
+          echo "0000025000000034500000240" | ./bin/loan_amortization > fumee.txt
+          grep -q '^R02400000000144348' fumee.txt
+          test "$(wc -l < fumee.txt)" -eq 241
+
+      - name: gofmt
+        run: |
+          non_formates=$(gofmt -l ./cmd ./internal)
+          if [ -n "$non_formates" ]; then
+            echo "Fichiers non formates :"
+            echo "$non_formates"
+            gofmt -d ./cmd ./internal
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # -race couvre le limiteur de debit, seul etat partage du service.
+      - name: go test
+        run: go test -race ./...
+
+  image:
+    name: Image et service
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construire l'image
+        run: docker build -t cobol-api:ci .
+
+      - name: Demarrer le conteneur
+        run: |
+          docker run -d --name ci -p 3000:3000 \
+            -e API_KEY=cle-de-ci -e RATE_LIMIT_PER_MINUTE=1000 \
+            cobol-api:ci
+          for i in $(seq 1 30); do
+            curl -sf localhost:3000/health >/dev/null && exit 0
+            sleep 1
+          done
+          echo "le service n'a pas demarre"
+          docker logs ci
+          exit 1
+
+      # Verifie l'artefact reel, pas seulement le code : le cas de reference
+      # doit ressortir au centime a travers toute la chaine.
+      - name: Verifier le cas de reference
+        run: |
+          reponse=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/loans/schedule?capital=250000.00&taux=3.45&mois=240')
+          echo "$reponse" | grep -q '"mensualite":1443.48'
+          echo "$reponse" | grep -q '"total_interets":96436.65'
+          echo "$reponse" | grep -q '"n":240,"paiement":1444.93'
+
+      - name: Verifier le refus sans cle
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            'http://localhost:3000/loans/schedule?capital=1000&taux=3&mois=12')
+          test "$code" = "401"
+
+      - name: Verifier le refus d'un parametre hors bornes
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/loans/schedule?capital=0&taux=3&mois=12')
+          test "$code" = "400"
+
+      - name: Journaux du conteneur en cas d'echec
+        if: failure()
+        run: docker logs ci
