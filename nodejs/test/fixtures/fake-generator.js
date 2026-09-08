@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Double du programme COBOL, même contrat : le nombre de codes en argument,
-// une ligne de neuf chiffres par code sur stdin.
+// une ligne de treize caractères par code sur stdin (dix de corps, trois
+// chiffres de palier).
 //
 // Variables d'environnement de test :
 //   FAKE_NOISE=1  écrit une ligne parasite avant et après les codes
@@ -25,9 +26,9 @@ process.stdin.on("end", () => {
   }
 
   for (let i = 0; i < count && i < lines.length; i++) {
-    const digits = lines[i].trim();
-    const tier = Number(digits.slice(6, 9)) % 3;
-    out.push(`PRO${digits.slice(0, 6)} - ${DISCOUNTS[tier]}`);
+    const line = lines[i].trim();
+    const tier = Number(line.slice(10, 13)) % 3;
+    out.push(`PRO${line.slice(0, 10)} - ${DISCOUNTS[tier]}`);
   }
 
   if (process.env.FAKE_NOISE === "1") {

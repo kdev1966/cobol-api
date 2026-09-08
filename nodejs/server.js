@@ -1,11 +1,15 @@
 // nodejs/server.js
 
 const express = require("express");
+const helmet = require("helmet");
+const cors = require("cors");
+const rateLimit = require("express-rate-limit");
 const path = require("path");
 const fs = require("fs");
 const sqlite3 = require("sqlite3").verbose();
 
 const { generatePromoCodes } = require("./promo-generator");
+const { createApiKeyGuard } = require("./auth");
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -26,6 +30,17 @@ const DB_PATH =
 // par SQLite. Les deux bornes sont désormais explicites.
 const MAX_CODES = 100;
 const MAX_HISTORY = 100;
+
+// Ces endroits emettent et listent des bons de reduction : ils exigent une cle.
+const API_KEY = process.env.API_KEY;
+const RATE_LIMIT_PER_MINUTE = Number(process.env.RATE_LIMIT_PER_MINUTE) || 30;
+
+// Aucune origine autorisee par defaut ; en lister via CORS_ORIGINS, separees
+// par des virgules.
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new sqlite3.Database(DB_PATH);
@@ -99,6 +114,20 @@ function sendServerError(res, context, error) {
   res.status(500).json({ status: "error", message: "Erreur interne" });
 }
 
+const requireApiKey = createApiKeyGuard(API_KEY);
+
+const limiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: RATE_LIMIT_PER_MINUTE,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { status: "error", message: "Trop de requetes" },
+});
+
+app.disable("x-powered-by");
+app.use(helmet());
+app.use(cors({ origin: CORS_ORIGINS.length > 0 ? CORS_ORIGINS : false }));
+
 // Middleware de log
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
@@ -106,7 +135,7 @@ app.use((req, res, next) => {
 });
 
 // Route pour générer des codes promotionnels
-app.get("/promocodes", async (req, res) => {
+app.get("/promocodes", limiter, requireApiKey, async (req, res) => {
   const count = parseBoundedInt(req.query.count, 5, MAX_CODES);
 
   if (count === null) {
@@ -140,7 +169,7 @@ app.get("/promocodes", async (req, res) => {
 });
 
 // Route pour récupérer les codes promos existants
-app.get("/history", async (req, res) => {
+app.get("/history", limiter, requireApiKey, async (req, res) => {
   const limit = parseBoundedInt(req.query.limit, 10, MAX_HISTORY);
 
   if (limit === null) {
@@ -190,6 +219,19 @@ app.use((req, res) => {
 // mieux vaut un conteneur qui refuse de se lever qu'un service qui répond
 // 500 sur chaque requête.
 async function initializeServer() {
+  if (!API_KEY) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        "API_KEY est obligatoire en production : /promocodes et /history " +
+          "emettent et listent des bons de reduction."
+      );
+    }
+    console.warn(
+      "⚠️  API_KEY absente : /promocodes et /history sont ouverts. " +
+        "Ne pas exploiter ainsi hors developpement."
+    );
+  }
+
   if (!fs.existsSync(COBOL_PROGRAM_PATH)) {
     throw new Error(
       `Binaire COBOL introuvable : ${COBOL_PROGRAM_PATH}\n` +

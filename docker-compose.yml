@@ -12,6 +12,11 @@ services:
       - promocodes-data:/app/database
     environment:
       - NODE_ENV=production
+      # /promocodes et /history émettent et listent des bons de réduction : sans
+      # API_KEY, le serveur refuse de démarrer en production. Voir .env.example.
+      - API_KEY=${API_KEY:-}
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-30}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
     restart: unless-stopped
 
 volumes:

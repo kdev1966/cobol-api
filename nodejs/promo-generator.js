@@ -1,30 +1,42 @@
 // nodejs/promo-generator.js
 //
 // Interface avec le programme COBOL. Le binaire reçoit le nombre de codes en
-// argument et une ligne de neuf chiffres par code sur son entrée standard ; il
-// répond une ligne « <CODE> - <REMISE> » par code.
+// argument et une ligne de treize caractères par code sur son entrée standard ;
+// il répond une ligne « <CODE> - <REMISE> » par code.
 
 const { execFile } = require("child_process");
 const crypto = require("crypto");
 
-// Neuf chiffres par code : six pour le numéro, trois pour le palier de remise.
-// FUNCTION RANDOM de GnuCOBOL est amorcée par les secondes depuis minuit
-// multipliées par des bits de pointeur de module, puis confiée à srandom() —
-// trop faible pour des codes qui valent de l'argent. L'entropie vient donc
-// d'ici, où un CSPRNG est disponible.
+// Alphabet base32 de Crockford : I, L, O et U sont exclus pour éviter les
+// confusions à la lecture et à la saisie d'un code.
+const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+const CODE_LENGTH = 10;
+
+// Treize caractères par code : dix pour le corps, trois chiffres pour le
+// palier de remise. FUNCTION RANDOM de GnuCOBOL est amorcée par les secondes
+// depuis minuit multipliées par des bits de pointeur de module, puis confiée à
+// srandom() — trop faible pour des codes qui valent de l'argent. L'entropie
+// vient donc d'ici, où un CSPRNG est disponible.
+//
+// Dix caractères sur un alphabet de 32 donnent 32^10, soit environ 1,1e15
+// combinaisons : l'énumération n'est plus praticable, là où les six chiffres
+// d'origine n'en offraient que 900 000.
 function buildEntropy(count) {
   const lines = [];
 
   for (let i = 0; i < count; i++) {
-    const codeDigits = String(crypto.randomInt(0, 1000000)).padStart(6, "0");
+    let body = "";
+    for (let c = 0; c < CODE_LENGTH; c++) {
+      body += ALPHABET[crypto.randomInt(0, ALPHABET.length)];
+    }
     const tierDigits = String(crypto.randomInt(0, 1000)).padStart(3, "0");
-    lines.push(codeDigits + tierDigits);
+    lines.push(body + tierDigits);
   }
 
   return lines.join("\n") + "\n";
 }
 
-// Une ligne bien formée vaut « PRO123456 - 20% OFF ».
+// Une ligne bien formée vaut « PROABCDEFGHJK - 20% OFF ».
 const PROMO_LINE = /^(\S+) - (.+)$/;
 
 // Renvoie les codes reconnus et les lignes écartées. Un avertissement de libcob
@@ -78,4 +90,10 @@ function generatePromoCodes(count, programPath) {
   });
 }
 
-module.exports = { buildEntropy, parsePromoCodes, generatePromoCodes };
+module.exports = {
+  ALPHABET,
+  CODE_LENGTH,
+  buildEntropy,
+  parsePromoCodes,
+  generatePromoCodes,
+};

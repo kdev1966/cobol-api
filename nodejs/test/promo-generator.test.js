@@ -5,6 +5,8 @@ const assert = require("node:assert");
 const path = require("node:path");
 
 const {
+  ALPHABET,
+  CODE_LENGTH,
   buildEntropy,
   parsePromoCodes,
   generatePromoCodes,
@@ -12,13 +14,27 @@ const {
 
 const FAKE = path.resolve(__dirname, "fixtures", "fake-generator.js");
 
-test("buildEntropy produit une ligne de neuf chiffres par code", () => {
+test("buildEntropy produit une ligne de treize caracteres par code", () => {
   const lines = buildEntropy(7).split("\n").filter((l) => l !== "");
 
   assert.strictEqual(lines.length, 7);
   for (const line of lines) {
-    assert.match(line, /^\d{9}$/);
+    assert.match(line, /^[0-9A-HJKMNP-TV-Z]{10}\d{3}$/);
   }
+});
+
+test("l'alphabet exclut les caracteres confondables", () => {
+  // Crockford base32 : I, L, O et U sont ecartes pour la saisie manuelle.
+  assert.strictEqual(ALPHABET.length, 32);
+  for (const c of "ILOU") {
+    assert.ok(!ALPHABET.includes(c), `${c} ne doit pas figurer dans l'alphabet`);
+  }
+});
+
+test("l'espace de codes rend l'enumeration impraticable", () => {
+  // Les six chiffres d'origine n'offraient que 900 000 combinaisons.
+  const combinaisons = Math.pow(ALPHABET.length, CODE_LENGTH);
+  assert.ok(combinaisons > 1e15, `espace trop petit : ${combinaisons}`);
 });
 
 test("buildEntropy ne rejoue pas la même séquence", () => {
@@ -31,12 +47,12 @@ test("buildEntropy ne rejoue pas la même séquence", () => {
 
 test("parsePromoCodes lit les lignes bien formées", () => {
   const { promoCodes, skippedLines } = parsePromoCodes(
-    "PRO123456 - 10% OFF\nPRO999999 - 30% OFF\n"
+    "PROABCDEFGHJK - 10% OFF\nPRO0123456789 - 30% OFF\n"
   );
 
   assert.deepStrictEqual(promoCodes, [
-    { code: "PRO123456", discount: "10% OFF" },
-    { code: "PRO999999", discount: "30% OFF" },
+    { code: "PROABCDEFGHJK", discount: "10% OFF" },
+    { code: "PRO0123456789", discount: "30% OFF" },
   ]);
   assert.deepStrictEqual(skippedLines, []);
 });
@@ -45,11 +61,11 @@ test("parsePromoCodes ignore les lignes vides et l'espace de remplissage", () =>
   // L'ancien programme écrivait la remise dans un PIC X(15), donc suivie
   // d'espaces.
   const { promoCodes } = parsePromoCodes(
-    "\n  PRO123456 - 10% OFF        \n\n"
+    "\n  PROABCDEFGHJK - 10% OFF        \n\n"
   );
 
   assert.deepStrictEqual(promoCodes, [
-    { code: "PRO123456", discount: "10% OFF" },
+    { code: "PROABCDEFGHJK", discount: "10% OFF" },
   ]);
 });
 
@@ -57,11 +73,11 @@ test("parsePromoCodes écarte les lignes parasites sans lever", () => {
   // Le code d'origine faisait un .trim() sur undefined ici, ce qui tuait le
   // process depuis le callback de exec plutôt que de produire une 500.
   const { promoCodes, skippedLines } = parsePromoCodes(
-    "libcob: warning: implicit CLOSE\nPRO123456 - 10% OFF\nligne sans separateur\n"
+    "libcob: warning: implicit CLOSE\nPROABCDEFGHJK - 10% OFF\nligne sans separateur\n"
   );
 
   assert.deepStrictEqual(promoCodes, [
-    { code: "PRO123456", discount: "10% OFF" },
+    { code: "PROABCDEFGHJK", discount: "10% OFF" },
   ]);
   assert.deepStrictEqual(skippedLines, [
     "libcob: warning: implicit CLOSE",
@@ -74,7 +90,7 @@ test("generatePromoCodes rend autant de codes que demandé", async () => {
 
   assert.strictEqual(codes.length, 12);
   for (const { code, discount } of codes) {
-    assert.match(code, /^PRO\d{6}$/);
+    assert.match(code, /^PRO[0-9A-HJKMNP-TV-Z]{10}$/);
     assert.ok(["10% OFF", "20% OFF", "30% OFF"].includes(discount));
   }
 });

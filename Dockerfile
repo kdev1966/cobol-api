@@ -1,13 +1,14 @@
 #  Dockerfile
 
 # --- Construction : compilateurs COBOL et C, chaîne de build Node ------------
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # GnuCOBOL traduit en C : un compilateur C est nécessaire ici. Node.js vient de
-# NodeSource car le paquet « nodejs » d'Ubuntu 22.04 est Node 12, en fin de vie
-# et trop ancien pour crypto.randomInt().
+# NodeSource car le paquet « nodejs » de la distribution est trop ancien.
+# Ubuntu 24.04 plutôt que 22.04 : le binaire précompilé de sqlite3 exige
+# GLIBC 2.38, absent de 22.04 qui s'arrête à 2.35.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
@@ -26,7 +27,7 @@ WORKDIR /app
 COPY cobol/ ./cobol/
 RUN mkdir -p /app/bin && \
     cobc -x -free cobol/promo-code-generator.cbl -o /app/bin/promo_generator && \
-    echo "123456789" | /app/bin/promo_generator 1 | grep -q " - "
+    echo "ABCDEFGHJK042" | /app/bin/promo_generator 1 | grep -q " - "
 
 # Dépendances Node avant les sources : la couche reste en cache tant que les
 # manifestes ne bougent pas. npm ci installe exactement le lockfile.
@@ -39,17 +40,17 @@ COPY nodejs/ ./nodejs/
 RUN cd nodejs && npm test
 
 # --- Exécution : ni compilateur C, ni compilateur COBOL ----------------------
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# libcob4 seul suffit à exécuter le binaire ; curl sert au HEALTHCHECK.
+# libcob4t64 seul suffit à exécuter le binaire ; curl sert au HEALTHCHECK.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     gnupg \
-    libcob4 \
+    libcob4t64 \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*

@@ -5,6 +5,7 @@ npm-debug.log*
 # Environment and sensitive files
 .env
 .env.*
+!.env.example
 
 # Logs
 *.log
