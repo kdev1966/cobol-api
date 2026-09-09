@@ -14,6 +14,22 @@ import (
 	"github.com/kdev1966/cobol-api/internal/db"
 )
 
+// binaireCapacite rend le programme du calcul inverse, ou une chaine vide.
+func binaireCapacite(t *testing.T) string {
+	t.Helper()
+	if chemin := os.Getenv("COBOL_CAPACITY_PATH"); chemin != "" {
+		return chemin
+	}
+	chemin, err := filepath.Abs("../../bin/loan_capacity")
+	if err != nil {
+		return ""
+	}
+	if _, err := os.Stat(chemin); err != nil {
+		return ""
+	}
+	return chemin
+}
+
 func binaire(t *testing.T) string {
 	t.Helper()
 	if chemin := os.Getenv("COBOL_PROGRAM_PATH"); chemin != "" {
@@ -34,6 +50,7 @@ func serveurDeTest(t *testing.T, ajuster func(*Config)) http.Handler {
 	cfg := Config{
 		Port:              "0",
 		CheminProgramme:   binaire(t),
+		CheminCapacite:    binaireCapacite(t),
 		CleAPI:            "cle-de-test",
 		RequetesParMinute: 1000,
 	}
@@ -480,6 +497,7 @@ func serveurAvecBase(t *testing.T) http.Handler {
 
 	s, err := NewServeur(Config{
 		CheminProgramme:   binaire(t),
+		CheminCapacite:    binaireCapacite(t),
 		CleAPI:            "cle-de-test",
 		RequetesParMinute: 1000,
 	}, pool)
@@ -762,5 +780,109 @@ func TestSimulationsIndisponibleSansBase(t *testing.T) {
 	}
 	if _, present := corps["simulation_id"]; present {
 		t.Error("aucun identifiant ne devrait etre rendu sans base")
+	}
+}
+
+func TestCapaciteDEmprunt(t *testing.T) {
+	h := serveurAvecBase(t)
+
+	w := appeler(h, "GET",
+		"/v1/loans/capacity?mensualite=2000.000&taux=8.5&mois=240&categorie=credits_logement",
+		"cle-de-test")
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d : %s", w.Code, w.Body.String())
+	}
+
+	var corps struct {
+		Capacite *struct {
+			Capital       json.Number `json:"capital"`
+			Mensualite    json.Number `json:"mensualite"`
+			MargeMillimes int         `json:"marge_millimes"`
+		} `json:"capacite"`
+		Demande struct {
+			Capital string `json:"capital"`
+		} `json:"demande"`
+		Recapitulatif struct {
+			PremiereMensualite json.Number `json:"premiere_mensualite"`
+			Teg                json.Number `json:"teg"`
+			Conforme           *bool       `json:"conforme"`
+		} `json:"recapitulatif"`
+		Bareme *struct {
+			Arrete string `json:"arrete"`
+		} `json:"bareme"`
+		SimulationID int64      `json:"simulation_id"`
+		Echeancier   []struct{} `json:"echeancier"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &corps); err != nil {
+		t.Fatalf("reponse illisible : %v", err)
+	}
+
+	if corps.Capacite == nil {
+		t.Fatal("la capacite devrait figurer dans la reponse")
+	}
+	// Le capital trouve doit etre celui deroule ensuite.
+	if corps.Demande.Capital != corps.Capacite.Capital.String() {
+		t.Errorf("capital deroule %s, capacite %s",
+			corps.Demande.Capital, corps.Capacite.Capital)
+	}
+	// La mensualite annoncee doit etre celle de l'echeancier produit.
+	if corps.Recapitulatif.PremiereMensualite.String() != corps.Capacite.Mensualite.String() {
+		t.Errorf("premiere mensualite %s, capacite annoncee %s",
+			corps.Recapitulatif.PremiereMensualite, corps.Capacite.Mensualite)
+	}
+	// L'echeancier complet est produit, et le verdict rendu.
+	if len(corps.Echeancier) != 240 {
+		t.Errorf("%d echeances, attendu 240", len(corps.Echeancier))
+	}
+	if corps.Recapitulatif.Conforme == nil {
+		t.Error("le verdict devrait etre rendu")
+	}
+	if corps.Bareme == nil || corps.Bareme.Arrete == "" {
+		t.Error("l'arrete applique devrait etre cite")
+	}
+	// Le calcul inverse produit une offre : il doit laisser une trace.
+	if corps.SimulationID == 0 {
+		t.Error("la capacite devrait etre tracee comme un echeancier")
+	}
+}
+
+func TestCapaciteValideSesParametres(t *testing.T) {
+	if binaireCapacite(t) == "" {
+		t.Skip("binaire de capacite absent")
+	}
+	h := serveurDeTest(t, nil)
+	base := "/v1/loans/capacity?taux=8.5&mois=240"
+
+	cas := []struct{ requete, champ string }{
+		{base, "mensualite"},
+		{base + "&mensualite=0", "mensualite"},
+		{base + "&mensualite=abc", "mensualite"},
+		{"/v1/loans/capacity?mensualite=2000.000&taux=8.5&mois=999", "mois"},
+		{"/v1/loans/capacity?mensualite=2000.000&taux=8.5&mois=240&methode=lineaire", "methode"},
+	}
+	for _, c := range cas {
+		w := appeler(h, "GET", c.requete, "cle-de-test")
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s : HTTP %d, attendu 400", c.requete, w.Code)
+			continue
+		}
+		var corps struct {
+			Champ string `json:"champ"`
+		}
+		_ = json.Unmarshal(w.Body.Bytes(), &corps)
+		if corps.Champ != c.champ {
+			t.Errorf("%s : champ %q, attendu %q", c.requete, corps.Champ, c.champ)
+		}
+	}
+}
+
+// Sans programme de capacite, l'endpoint doit le dire clairement.
+func TestCapaciteIndisponibleSansProgramme(t *testing.T) {
+	h := serveurDeTest(t, func(c *Config) { c.CheminCapacite = "" })
+
+	got := appeler(h, "GET",
+		"/v1/loans/capacity?mensualite=2000.000&taux=8.5&mois=240", "cle-de-test").Code
+	if got != http.StatusServiceUnavailable {
+		t.Errorf("HTTP %d, attendu 503", got)
 	}
 }

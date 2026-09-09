@@ -46,11 +46,12 @@ jobs:
         run: |
           mkdir -p bin
           cobc -x -free cobol/loan-amortization.cbl -o bin/loan_amortization
+          cobc -x -free cobol/loan-capacity.cbl -o bin/loan_capacity
 
       # Le meme script que dans l'image : le cas de reference ne vit qu'a un
       # seul endroit.
       - name: Test de fumee du binaire COBOL
-        run: sh scripts/fumee-cobol.sh ./bin/loan_amortization
+        run: sh scripts/fumee-cobol.sh ./bin/loan_amortization ./bin/loan_capacity
 
       - name: gofmt
         run: |
@@ -215,6 +216,28 @@ jobs:
           echo "$excessif" | grep -q '"marge":-1.93'
 
       # Le bareme resout le taux effectif moyen et le verdict cite l'arrete.
+      # Le calcul inverse doit rendre un capital dont l'echeancier produit
+      # exactement la mensualite annoncee, sans depasser le budget.
+      - name: Verifier la capacite d'emprunt
+        run: |
+          cap=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/capacity?mensualite=2000.000&taux=8.5&mois=240&categorie=credits_logement')
+          echo "$cap" | grep -q '"capital":230461.737'
+          echo "$cap" | grep -q '"mensualite":2000.000'
+          echo "$cap" | grep -q '"premiere_mensualite":2000.000'
+          echo "$cap" | grep -q '"arrete":"Arrete du 28 juillet 2026"'
+          # Le calcul inverse produit une offre : il laisse une trace.
+          echo "$cap" | grep -q '"simulation_id":'
+
+          # Plus l'amortissement est lent, plus on peut emprunter.
+          fine=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/capacity?mensualite=2000.000&taux=8.5&mois=240&methode=in_fine')
+          echo "$fine" | grep -q '"capital":282353.011'
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/capacity?taux=8.5&mois=240')
+          test "$code" = "400"
+
       - name: Verifier le bareme
         run: |
           liste=$(curl -sf -H 'X-API-Key: cle-de-ci' http://localhost:3000/v1/baremes)
@@ -267,6 +290,7 @@ jobs:
           echo "$spec" | grep -q '/v1/loans/schedule'
           echo "$spec" | grep -q '/v1/baremes'
           echo "$spec" | grep -q '/v1/simulations'
+          echo "$spec" | grep -q '/v1/loans/capacity'
           # Le chemin non versionne ne doit plus repondre.
           code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
             'http://localhost:3000/loans/schedule?capital=1000&taux=3&mois=12')

@@ -146,16 +146,19 @@ const delaiAvantArret = 2 * time.Second
 // Moteur lance le binaire COBOL.
 type Moteur struct {
 	Chemin string
-	Delai  time.Duration
+	// CheminCapacite designe le programme du calcul inverse. Vide, la
+	// capacite d'emprunt n'est pas offerte.
+	CheminCapacite string
+	Delai          time.Duration
 }
 
-// NewMoteur rend un moteur qui appellera le binaire situe a chemin. Un delai
-// nul ou negatif retombe sur DelaiParDefaut.
-func NewMoteur(chemin string, delai time.Duration) *Moteur {
+// NewMoteur rend un moteur qui appellera les binaires situes aux chemins
+// donnes. Un delai nul ou negatif retombe sur DelaiParDefaut.
+func NewMoteur(chemin, cheminCapacite string, delai time.Duration) *Moteur {
 	if delai <= 0 {
 		delai = DelaiParDefaut
 	}
-	return &Moteur{Chemin: chemin, Delai: delai}
+	return &Moteur{Chemin: chemin, CheminCapacite: cheminCapacite, Delai: delai}
 }
 
 // ligneEntree rend les 64 caracteres attendus par le programme : capital

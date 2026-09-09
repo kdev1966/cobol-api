@@ -19,7 +19,8 @@ COPY scripts/ ./scripts/
 # pour que le cas de reference ne vive qu'a un seul endroit.
 RUN mkdir -p /out && \
     cobc -x -free cobol/loan-amortization.cbl -o /out/loan_amortization && \
-    sh scripts/fumee-cobol.sh /out/loan_amortization
+    cobc -x -free cobol/loan-capacity.cbl -o /out/loan_capacity && \
+    sh scripts/fumee-cobol.sh /out/loan_amortization /out/loan_capacity
 
 # --- Compilation du service Go ----------------------------------------------
 FROM golang:1.26-bookworm AS go-builder
@@ -72,6 +73,7 @@ RUN useradd --system --create-home --shell /usr/sbin/nologin cobolapi
 USER cobolapi
 
 ENV COBOL_PROGRAM_PATH=/app/bin/loan_amortization \
+    COBOL_CAPACITY_PATH=/app/bin/loan_capacity \
     APP_ENV=production \
     PORT=3000
 

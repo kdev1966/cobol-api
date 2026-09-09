@@ -117,6 +117,11 @@ type Parametres struct {
 	FraisGarantie string
 	TauxAssurance string
 	Assiette      string
+	// Mensualite est le budget mensuel du calcul inverse.
+	Mensualite string
+	// Categorie designe la categorie de concours dont le taux effectif moyen
+	// sera lu dans le bareme.
+	Categorie string
 	// Tem est le taux effectif moyen publie pour la categorie de concours.
 	// Vide ou absent, aucune verification du taux excessif n'est demandee.
 	Tem string

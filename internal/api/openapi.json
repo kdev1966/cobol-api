@@ -477,6 +477,187 @@
           }
         }
       }
+    },
+    "/v1/loans/capacity": {
+      "get": {
+        "tags": [
+          "credit"
+        ],
+        "summary": "Capacite d'emprunt",
+        "description": "Calcul inverse : a partir d'une mensualite supportable, le capital maximal empruntable. La reponse porte aussi l'echeancier complet que ce capital produit, son TEG et, si une categorie ou un TEM est fourni, le verdict de taux excessif. Comme l'echeancier, elle laisse une trace dans la piste d'audit.",
+        "operationId": "capacite",
+        "parameters": [
+          {
+            "name": "mensualite",
+            "in": "query",
+            "required": true,
+            "description": "Budget mensuel, assurance comprise, en dinars avec au plus trois decimales.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+(\\.\\d{1,3})?$"
+            },
+            "example": "2000.000"
+          },
+          {
+            "name": "taux",
+            "in": "query",
+            "required": true,
+            "description": "Taux nominal annuel en pourcent, avec au plus six decimales. Le taux periodique en est deduit par division par douze (taux proportionnel).",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,2}(\\.\\d{1,6})?$"
+            },
+            "example": "8.5"
+          },
+          {
+            "name": "mois",
+            "in": "query",
+            "required": true,
+            "description": "Duree en mensualites.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600
+            },
+            "example": 240
+          },
+          {
+            "name": "methode",
+            "in": "query",
+            "required": false,
+            "description": "Methode d'amortissement. Les lettres A, C et I sont acceptees comme alias.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "annuite_constante",
+                "capital_constant",
+                "in_fine"
+              ],
+              "default": "annuite_constante"
+            }
+          },
+          {
+            "name": "taux_assurance",
+            "in": "query",
+            "required": false,
+            "description": "Taux annuel d'assurance emprunteur en pourcent. La prime mensuelle en est deduite par division par douze.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,2}(\\.\\d{1,6})?$",
+              "default": "0"
+            },
+            "example": "0.36"
+          },
+          {
+            "name": "assiette_assurance",
+            "in": "query",
+            "required": false,
+            "description": "Assiette de la prime. Un taux d'assurance sans assiette declaree porte sur le capital initial, convention la plus repandue. Les lettres N, I et R sont acceptees comme alias.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "aucune",
+                "capital_initial",
+                "capital_restant_du"
+              ],
+              "default": "aucune"
+            }
+          },
+          {
+            "name": "tem",
+            "in": "query",
+            "required": false,
+            "description": "Taux effectif moyen publie par la Banque Centrale de Tunisie pour la categorie de concours, en pourcent. Fourni, la reponse porte un verdict de taux excessif : le seuil est le TEM majore d'un cinquieme, et le depassement est strict. Omis, le TEG est rendu sans jugement. S'exclut avec categorie.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,2}(\\.\\d{1,2})?$"
+            },
+            "example": "10.25"
+          },
+          {
+            "name": "categorie",
+            "in": "query",
+            "required": false,
+            "description": "Categorie de concours. Le taux effectif moyen est alors lu dans le bareme en vigueur et la reponse cite l'arrete applique. S'exclut avec tem : la categorie determine le taux.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "leasing",
+                "decouverts",
+                "gestion_des_dettes",
+                "credits_consommation",
+                "credits_logement",
+                "credits_moyen_terme",
+                "credits_long_terme",
+                "credits_court_terme"
+              ]
+            },
+            "example": "credits_consommation"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Capacite et echeancier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Reponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Parametre absent ou hors bornes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Cle d'API absente ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Plafond de requetes atteint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Calcul de capacite indisponible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Le calcul a depasse son delai",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -771,6 +952,14 @@
             "type": "integer",
             "description": "Identifiant de la ligne inscrite dans la piste d'audit. Absent quand aucune base n'est configuree.",
             "example": 42
+          },
+          "capacite": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Capacite"
+              }
+            ],
+            "description": "Present seulement sur /v1/loans/capacity."
           }
         }
       },
@@ -905,6 +1094,31 @@
           "cree_le": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "Capacite": {
+        "type": "object",
+        "description": "Resultat du calcul inverse. Le capital rendu est le plus grand dont la premiere mensualite tienne dans le budget, arrondis compris : un millime de plus le depasserait.",
+        "required": [
+          "capital",
+          "mensualite",
+          "marge_millimes"
+        ],
+        "properties": {
+          "capital": {
+            "type": "number",
+            "example": 230461.737
+          },
+          "mensualite": {
+            "type": "number",
+            "description": "Celle que le capital produit reellement, toujours inferieure ou egale au budget.",
+            "example": 2000.0
+          },
+          "marge_millimes": {
+            "type": "integer",
+            "description": "Part du budget non employee, en millimes.",
+            "example": 0
           }
         }
       }

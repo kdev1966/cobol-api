@@ -14,6 +14,23 @@ import (
 
 // binaire rend le chemin du programme COBOL compile, ou saute le test s'il
 // n'a pas ete construit. Les tests de parsing, eux, tournent sans lui.
+// binaireCapacite rend le programme du calcul inverse, ou une chaine vide :
+// les tests qui n'en ont pas besoin s'en passent.
+func binaireCapacite(t *testing.T) string {
+	t.Helper()
+	if chemin := os.Getenv("COBOL_CAPACITY_PATH"); chemin != "" {
+		return chemin
+	}
+	chemin, err := filepath.Abs("../../bin/loan_capacity")
+	if err != nil {
+		return ""
+	}
+	if _, err := os.Stat(chemin); err != nil {
+		return ""
+	}
+	return chemin
+}
+
 func binaire(t *testing.T) string {
 	t.Helper()
 	if chemin := os.Getenv("COBOL_PROGRAM_PATH"); chemin != "" {
@@ -169,7 +186,7 @@ func millimes(t *testing.T, n interface{ String() string }) int64 {
 }
 
 func TestInvariantsDeLEcheancier(t *testing.T) {
-	moteur := NewMoteur(binaire(t), 0)
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
 
 	// Montants en dinars, taux plausibles sur le marche tunisien.
 	cas := []struct{ capital, taux, mois string }{
@@ -284,7 +301,7 @@ func verifierInvariants(t *testing.T, moteur *Moteur, p Parametres) {
 // Chaque methode a une signature propre, verifiee en plus des invariants
 // communs.
 func TestSignatureDeChaqueMethode(t *testing.T) {
-	moteur := NewMoteur(binaire(t), 0)
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
 
 	calculer := func(methode string) *Echeancier {
 		t.Helper()
@@ -346,7 +363,7 @@ func TestSignatureDeChaqueMethode(t *testing.T) {
 
 // Cas de reference verifie independamment avec le module decimal de Python.
 func TestCasDeReference(t *testing.T) {
-	moteur := NewMoteur(binaire(t), 0)
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
 
 	// Credit logement de 250 000 dinars a 8,5 % sur vingt ans. Toutes les
 	// valeurs sont recoupees avec une resolution independante en Decimal
@@ -391,7 +408,7 @@ func TestCasDeReference(t *testing.T) {
 // maniere dont le capital est amorti : le decret annualise proportionnellement
 // le taux de periode. C'est une propriete du domaine, verifiee ici comme telle.
 func TestLeTegNeDependPasDeLaMethode(t *testing.T) {
-	moteur := NewMoteur(binaire(t), 0)
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
 
 	var reference string
 	for _, methode := range MethodesAcceptees() {
@@ -420,7 +437,7 @@ func TestLeTegNeDependPasDeLaMethode(t *testing.T) {
 }
 
 func TestLeTegEstNulSansInterets(t *testing.T) {
-	moteur := NewMoteur(binaire(t), 0)
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
 
 	d, err := ParseDemande(Parametres{Capital: "10000.000", Taux: "0", Mois: "12"})
 	if err != nil {
@@ -436,7 +453,7 @@ func TestLeTegEstNulSansInterets(t *testing.T) {
 }
 
 func TestCalculerRemonteLEchecDuProgramme(t *testing.T) {
-	moteur := NewMoteur(binaire(t), 0)
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
 
 	// Capital nul : le programme COBOL doit refuser et sortir en erreur.
 	_, err := moteur.Calculer(context.Background(), Demande{
@@ -457,7 +474,7 @@ func TestCalculerAbandonneApresLeDelai(t *testing.T) {
 		t.Skip("fixture testdata/lent.sh absente")
 	}
 
-	moteur := NewMoteur(chemin, 150*time.Millisecond)
+	moteur := NewMoteur(chemin, "", 150*time.Millisecond)
 	d, err := ParseDemande(Parametres{Capital: "1000.00", Taux: "3.45", Mois: "12", Methode: ""})
 	if err != nil {
 		t.Fatalf("ParseDemande : %v", err)
@@ -478,18 +495,18 @@ func TestCalculerAbandonneApresLeDelai(t *testing.T) {
 
 func TestNewMoteurRetombeSurLeDelaiParDefaut(t *testing.T) {
 	for _, delai := range []time.Duration{0, -time.Second} {
-		if got := NewMoteur("/x", delai).Delai; got != DelaiParDefaut {
+		if got := NewMoteur("/x", "", delai).Delai; got != DelaiParDefaut {
 			t.Errorf("NewMoteur(_, %s).Delai = %s, attendu %s",
 				delai, got, DelaiParDefaut)
 		}
 	}
-	if got := NewMoteur("/x", 2*time.Second).Delai; got != 2*time.Second {
+	if got := NewMoteur("/x", "", 2*time.Second).Delai; got != 2*time.Second {
 		t.Errorf("un delai explicite doit etre conserve, recu %s", got)
 	}
 }
 
 func TestCalculerAvecUnBinaireIntrouvable(t *testing.T) {
-	moteur := NewMoteur("/inexistant/loan_amortization", 0)
+	moteur := NewMoteur("/inexistant/loan_amortization", "", 0)
 	d, _ := ParseDemande(Parametres{Capital: "1000.00", Taux: "3.45", Mois: "12", Methode: ""})
 
 	if _, err := moteur.Calculer(context.Background(), d); err == nil {
@@ -500,7 +517,7 @@ func TestCalculerAvecUnBinaireIntrouvable(t *testing.T) {
 // Les invariants doivent tenir avec des frais et une assurance, sur les trois
 // methodes et les deux assiettes.
 func TestInvariantsAvecFraisEtAssurance(t *testing.T) {
-	moteur := NewMoteur(binaire(t), 0)
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
 
 	cas := []Parametres{
 		{Capital: "250000.000", Taux: "8.5", Mois: "240", FraisDossier: "1500.000"},
@@ -530,7 +547,7 @@ func TestInvariantsAvecFraisEtAssurance(t *testing.T) {
 // Les frais et l'assurance doivent faire monter le TAEG, et l'assurance sur le
 // capital restant du couter moins que sur le capital initial.
 func TestLesFraisEtLAssuranceRencherissentLeTeg(t *testing.T) {
-	moteur := NewMoteur(binaire(t), 0)
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
 
 	calculer := func(p Parametres) *Echeancier {
 		t.Helper()
@@ -598,7 +615,7 @@ func TestLesFraisEtLAssuranceRencherissentLeTeg(t *testing.T) {
 // Loi n° 99-64 : est excessif tout pret dont le TEG excede de plus du
 // cinquieme le taux effectif moyen de la categorie.
 func TestVerdictDeTauxExcessif(t *testing.T) {
-	moteur := NewMoteur(binaire(t), 0)
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
 
 	calculer := func(tem string) *Echeancier {
 		t.Helper()
@@ -664,7 +681,7 @@ func TestVerdictDeTauxExcessif(t *testing.T) {
 // Les seuils publies par arrete doivent se retrouver a partir des taux
 // effectifs moyens : c'est la regle du cinquieme, arrondie a deux decimales.
 func TestLeSeuilRedonneLesValeursPubliees(t *testing.T) {
-	moteur := NewMoteur(binaire(t), 0)
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
 
 	// Arrete du 28 juillet 2026, taux effectifs moyens et seuils
 	// correspondants publies par la Banque Centrale de Tunisie.
@@ -704,7 +721,7 @@ func TestLeSeuilRedonneLesValeursPubliees(t *testing.T) {
 // devenir usuraire une fois tous les couts integres. C'est precisement ce que
 // la reglementation vise, et le service doit le voir.
 func TestUnPretLiciteNuPeutDevenirExcessif(t *testing.T) {
-	moteur := NewMoteur(binaire(t), 0)
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
 
 	verdict := func(p Parametres) (bool, string) {
 		t.Helper()
@@ -756,5 +773,136 @@ func TestNombreSigne(t *testing.T) {
 		if _, err := nombreSigne(mauvais, 2); err == nil {
 			t.Errorf("nombreSigne(%q) aurait du echouer", mauvais)
 		}
+	}
+}
+
+// Le capital rendu doit etre le plus grand qui tienne dans le budget : un
+// millime de plus doit le depasser. C'est la propriete que la dichotomie
+// garantit, et elle se verifie contre l'echeancier reel.
+func TestLaCapaciteEstMaximale(t *testing.T) {
+	chemin := binaireCapacite(t)
+	if chemin == "" {
+		t.Skip("binaire de capacite absent")
+	}
+	moteur := NewMoteur(binaire(t), chemin, 0)
+	ctx := context.Background()
+
+	cas := []Parametres{
+		{Mensualite: "2169.558", Taux: "8.5", Mois: "240"},
+		{Mensualite: "1500.000", Taux: "13", Mois: "60",
+			TauxAssurance: "1.5", Assiette: "capital_initial"},
+		{Mensualite: "2000.000", Taux: "8.5", Mois: "240", Methode: "capital_constant"},
+		{Mensualite: "2000.000", Taux: "8.5", Mois: "240", Methode: "in_fine"},
+		{Mensualite: "833.333", Taux: "0", Mois: "12"},
+	}
+
+	for _, p := range cas {
+		nom := p.Mensualite + "@" + p.Taux + "/" + p.Methode
+		t.Run(nom, func(t *testing.T) {
+			budget, err := ParseDemandeCapacite(p)
+			if err != nil {
+				t.Fatalf("ParseDemandeCapacite : %v", err)
+			}
+			cap, err := moteur.Capaciter(ctx, budget)
+			if err != nil {
+				t.Fatalf("Capaciter : %v", err)
+			}
+
+			// La mensualite annoncee doit tenir dans le budget.
+			if millimes(t, cap.Mensualite) > budget.BudgetMillimes {
+				t.Fatalf("mensualite %s au-dessus du budget %s",
+					cap.Mensualite, p.Mensualite)
+			}
+
+			// Elle doit correspondre a l'echeancier reellement produit.
+			premiere := func(capital string) int64 {
+				t.Helper()
+				p2 := p
+				p2.Capital, p2.Mensualite = capital, ""
+				d, err := ParseDemande(p2)
+				if err != nil {
+					t.Fatalf("ParseDemande(%s) : %v", capital, err)
+				}
+				res, err := moteur.Calculer(ctx, d)
+				if err != nil {
+					t.Fatalf("Calculer(%s) : %v", capital, err)
+				}
+				return millimes(t, res.Echeancier[0].Mensualite)
+			}
+
+			capital := millimes(t, cap.Capital)
+			if got := premiere(cap.Capital.String()); got != millimes(t, cap.Mensualite) {
+				t.Errorf("echeancier reel : mensualite %d, capacite annoncee %s",
+					got, cap.Mensualite)
+			}
+			// Un millime de plus doit depasser le budget : c'est ce qui fait
+			// du resultat un maximum et non une approximation prudente.
+			suivant := formaterEchelle(capital+1, DecimalesMonnaie)
+			if got := premiere(suivant); got <= budget.BudgetMillimes {
+				t.Errorf("capital %s tient encore dans le budget : la capacite n'est pas maximale",
+					suivant)
+			}
+		})
+	}
+}
+
+// Plus l'amortissement est lent, plus on peut emprunter a mensualite egale.
+func TestLaCapaciteDependDeLaMethode(t *testing.T) {
+	chemin := binaireCapacite(t)
+	if chemin == "" {
+		t.Skip("binaire de capacite absent")
+	}
+	moteur := NewMoteur(binaire(t), chemin, 0)
+
+	capital := func(methode string) int64 {
+		t.Helper()
+		d, err := ParseDemandeCapacite(Parametres{
+			Mensualite: "2000.000", Taux: "8.5", Mois: "240", Methode: methode,
+		})
+		if err != nil {
+			t.Fatalf("ParseDemandeCapacite : %v", err)
+		}
+		c, err := moteur.Capaciter(context.Background(), d)
+		if err != nil {
+			t.Fatalf("Capaciter : %v", err)
+		}
+		return millimes(t, c.Capital)
+	}
+
+	lineaire, annuite, inFine := capital("capital_constant"), capital("annuite_constante"), capital("in_fine")
+	if lineaire >= annuite || annuite >= inFine {
+		t.Errorf("capacites attendues capital_constant < annuite < in_fine, recu %d %d %d",
+			lineaire, annuite, inFine)
+	}
+}
+
+func TestLireCapaciteRefuseUneSortieMalformee(t *testing.T) {
+	for _, mauvaise := range []string{"", "C123", "X" + strings.Repeat("0", 32),
+		"C" + strings.Repeat("x", 32)} {
+		if _, err := lireCapacite(mauvaise); err == nil {
+			t.Errorf("lireCapacite(%q) aurait du echouer", mauvaise)
+		}
+	}
+}
+
+func TestParseDemandeCapaciteValideLeBudget(t *testing.T) {
+	for _, mauvais := range []string{"", "0", "abc", "-5", "100000000000000"} {
+		_, err := ParseDemandeCapacite(Parametres{
+			Mensualite: mauvais, Taux: "8.5", Mois: "240",
+		})
+		if err == nil {
+			t.Errorf("mensualite %q : aurait du echouer", mauvais)
+			continue
+		}
+		invalide, ok := err.(*ErreurValidation)
+		if !ok || invalide.Champ != "mensualite" {
+			t.Errorf("mensualite %q : erreur %v, champ attendu mensualite", mauvais, err)
+		}
+	}
+	// Les autres parametres restent valides comme pour l'echeancier.
+	if _, err := ParseDemandeCapacite(Parametres{
+		Mensualite: "2000.000", Taux: "8.5", Mois: "999",
+	}); err == nil {
+		t.Error("une duree hors bornes aurait du etre refusee")
 	}
 }

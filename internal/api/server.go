@@ -29,6 +29,7 @@ var specificationOpenAPI []byte
 type Config struct {
 	Port              string
 	CheminProgramme   string
+	CheminCapacite    string
 	CleAPI            string
 	RequetesParMinute int
 	OriginesCORS      []string
@@ -42,6 +43,7 @@ func ConfigDepuisEnv() Config {
 	return Config{
 		Port:              valeurOuDefaut("PORT", "3000"),
 		CheminProgramme:   valeurOuDefaut("COBOL_PROGRAM_PATH", "/app/bin/loan_amortization"),
+		CheminCapacite:    valeurOuDefaut("COBOL_CAPACITY_PATH", "/app/bin/loan_capacity"),
 		CleAPI:            os.Getenv("API_KEY"),
 		RequetesParMinute: entierOuDefaut("RATE_LIMIT_PER_MINUTE", 30),
 		OriginesCORS:      origines(os.Getenv("CORS_ORIGINS")),
@@ -85,7 +87,7 @@ func NewServeur(cfg Config, base *db.Pool) (*Serveur, error) {
 
 	s := &Serveur{
 		cfg:    cfg,
-		moteur: loan.NewMoteur(cfg.CheminProgramme, cfg.DelaiCalcul),
+		moteur: loan.NewMoteur(cfg.CheminProgramme, cfg.CheminCapacite, cfg.DelaiCalcul),
 		base:   base,
 		mux:    http.NewServeMux(),
 	}
@@ -113,6 +115,7 @@ func (s *Serveur) monterRoutes() {
 	// Les routes metier sont versionnees : le format du recapitulatif a
 	// deja change une fois, et un client tiers ne doit pas en patir.
 	s.mux.Handle("GET /v1/loans/schedule", protege(s.echeancier))
+	s.mux.Handle("GET /v1/loans/capacity", protege(s.capacite))
 	s.mux.Handle("GET /v1/baremes", protege(s.bareme))
 	s.mux.Handle("GET /v1/simulations", protege(s.simulations))
 	s.mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -145,6 +148,12 @@ func (s *Serveur) index(w http.ResponseWriter, r *http.Request) {
 				"methodes":            loan.MethodesAcceptees(),
 				"methode_par_defaut":  loan.MethodeParDefaut,
 				"assiettes_assurance": loan.AssiettesAcceptees(),
+			},
+			{
+				"method":      "GET",
+				"path":        "/v1/loans/capacity?mensualite=&taux=&mois=&methode=",
+				"auth":        true,
+				"description": "Capital maximal empruntable pour une mensualite donnee",
 			},
 			{
 				"method":      "GET",
@@ -280,6 +289,49 @@ func (s *Serveur) simulations(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// capacite rend le capital maximal empruntable pour une mensualite donnee,
+// accompagne de l'echeancier qu'il produit : l'emprunteur veut savoir combien
+// il peut emprunter, mais aussi ce que ca donne.
+func (s *Serveur) capacite(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	if s.cfg.CheminCapacite == "" {
+		ecrireErreur(w, http.StatusServiceUnavailable, "Calcul de capacite indisponible")
+		return
+	}
+
+	params := loan.Parametres{
+		Mensualite:    q.Get("mensualite"),
+		Taux:          q.Get("taux"),
+		Mois:          q.Get("mois"),
+		Methode:       q.Get("methode"),
+		TauxAssurance: q.Get("taux_assurance"),
+		Assiette:      q.Get("assiette_assurance"),
+	}
+	budget, err := loan.ParseDemandeCapacite(params)
+	if err != nil {
+		s.repondreValidation(w, err)
+		return
+	}
+
+	capacite, err := s.moteur.Capaciter(r.Context(), budget)
+	if err != nil {
+		slog.Error("calcul de capacite", "id", IDRequete(r.Context()), "erreur", err)
+		if errors.Is(err, loan.ErrDelaiDepasse) {
+			ecrireErreur(w, http.StatusGatewayTimeout, "Le calcul a depasse son delai")
+			return
+		}
+		ecrireErreur(w, http.StatusInternalServerError, "Erreur interne")
+		return
+	}
+
+	// Le capital trouve est ensuite deroule : le calcul inverse ne dispense
+	// pas de produire l'echeancier, ni d'en juger le taux.
+	params.Capital = capacite.Capital.String()
+	params.Tem, params.Categorie = q.Get("tem"), q.Get("categorie")
+	s.produireEcheancier(w, r, params, map[string]any{"capacite": capacite})
+}
+
 // bareme rend les taux effectifs moyens en vigueur, une ligne par categorie.
 func (s *Serveur) bareme(w http.ResponseWriter, r *http.Request) {
 	if s.baremes == nil {
@@ -319,13 +371,43 @@ func (s *Serveur) resoudreTem(r *http.Request, categorie string) (*db.TauxEffect
 	return &t, nil
 }
 
+// repondreValidation traduit une erreur de validation en 400 nommant le champ.
+func (s *Serveur) repondreValidation(w http.ResponseWriter, err error) {
+	var invalide *loan.ErreurValidation
+	if errors.As(err, &invalide) {
+		ecrireJSON(w, http.StatusBadRequest, map[string]any{
+			"status": "error", "champ": invalide.Champ, "message": invalide.Message,
+		})
+		return
+	}
+	ecrireErreur(w, http.StatusBadRequest, "Parametres invalides")
+}
+
 func (s *Serveur) echeancier(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	s.produireEcheancier(w, r, loan.Parametres{
+		Capital:       q.Get("capital"),
+		Taux:          q.Get("taux"),
+		Mois:          q.Get("mois"),
+		Methode:       q.Get("methode"),
+		FraisDossier:  q.Get("frais_dossier"),
+		FraisGarantie: q.Get("frais_garantie"),
+		TauxAssurance: q.Get("taux_assurance"),
+		Assiette:      q.Get("assiette_assurance"),
+		Tem:           q.Get("tem"),
+		Categorie:     q.Get("categorie"),
+	}, nil)
+}
+
+// produireEcheancier resout le bareme, calcule, trace et repond. Le calcul
+// inverse s'y branche apres avoir determine le capital.
+func (s *Serveur) produireEcheancier(w http.ResponseWriter, r *http.Request,
+	params loan.Parametres, supplement map[string]any) {
 
 	// La categorie et le taux effectif moyen designent la meme chose : l'un se
 	// lit dans le bareme, l'autre est impose. Les accepter ensemble ouvrirait
 	// la porte a un verdict rendu sur un taux qui n'est pas celui annonce.
-	categorie, tem := strings.TrimSpace(q.Get("categorie")), q.Get("tem")
+	categorie, tem := strings.TrimSpace(params.Categorie), params.Tem
 	var bareme *db.TauxEffectif
 	if categorie != "" {
 		if strings.TrimSpace(tem) != "" {
@@ -340,9 +422,7 @@ func (s *Serveur) echeancier(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			var invalide *loan.ErreurValidation
 			if errors.As(err, &invalide) {
-				ecrireJSON(w, http.StatusBadRequest, map[string]any{
-					"status": "error", "champ": invalide.Champ, "message": invalide.Message,
-				})
+				s.repondreValidation(w, err)
 				return
 			}
 			slog.Error("resolution du bareme", "id", IDRequete(r.Context()), "erreur", err)
@@ -352,28 +432,10 @@ func (s *Serveur) echeancier(w http.ResponseWriter, r *http.Request) {
 		tem = bareme.Tem
 	}
 
-	demande, err := loan.ParseDemande(loan.Parametres{
-		Capital:       q.Get("capital"),
-		Taux:          q.Get("taux"),
-		Mois:          q.Get("mois"),
-		Methode:       q.Get("methode"),
-		FraisDossier:  q.Get("frais_dossier"),
-		FraisGarantie: q.Get("frais_garantie"),
-		TauxAssurance: q.Get("taux_assurance"),
-		Assiette:      q.Get("assiette_assurance"),
-		Tem:           tem,
-	})
+	params.Tem = tem
+	demande, err := loan.ParseDemande(params)
 	if err != nil {
-		var invalide *loan.ErreurValidation
-		if errors.As(err, &invalide) {
-			ecrireJSON(w, http.StatusBadRequest, map[string]any{
-				"status":  "error",
-				"champ":   invalide.Champ,
-				"message": invalide.Message,
-			})
-			return
-		}
-		ecrireErreur(w, http.StatusBadRequest, "Parametres invalides")
+		s.repondreValidation(w, err)
 		return
 	}
 
@@ -414,6 +476,9 @@ func (s *Serveur) echeancier(w http.ResponseWriter, r *http.Request) {
 	// rapporte au bareme sur lequel il repose.
 	if bareme != nil {
 		corps["bareme"] = bareme
+	}
+	for cle, valeur := range supplement {
+		corps[cle] = valeur
 	}
 	ecrireJSON(w, http.StatusOK, corps)
 }

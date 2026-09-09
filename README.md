@@ -104,6 +104,32 @@ Sur 250 000 DT à 8,5 % sur 240 mois :
 Chaque ligne de l'échéancier distingue `echeance` (capital + intérêts) de
 `mensualite` (échéance + assurance), ce que l'emprunteur verse réellement.
 
+## La capacité d'emprunt
+
+Le calcul inverse : à partir d'une mensualité supportable, le capital maximal
+empruntable. Un second programme COBOL le cherche **par dichotomie**.
+
+La formule fermée existe pour chaque méthode, mais elle ignore les arrondis :
+le capital qu'elle rend produit parfois une mensualité d'un millime au-dessus
+du budget. La dichotomie retient le plus grand capital dont la première
+mensualité tient réellement dans le budget — un millime de plus le dépasse, ce
+qu'un test vérifie contre l'échéancier produit par l'autre programme.
+
+À 2 000 DT par mois, 8,5 % sur 240 mois :
+
+| méthode | capital |
+|---|---|
+| capital constant | 177 777,811 DT |
+| annuité constante | 230 461,737 DT |
+| in fine | 282 353,011 DT |
+
+Plus l'amortissement est lent, plus on peut emprunter à mensualité égale.
+
+La réponse porte aussi **l'échéancier complet** que ce capital produit, son TEG
+et le verdict de taux excessif : savoir combien on peut emprunter n'a d'intérêt
+que si l'on voit ce que ça donne. Deux programmes COBOL s'enchaînent, d'où une
+requête à **34,2 ms** contre 22,4 pour un échéancier seul.
+
 ## Le taux excessif
 
 La [loi n° 99-64 du 15 juillet 1999](https://www.jurisitetunisie.com/tunisie/codes/teg/tie1000.htm)
@@ -210,6 +236,7 @@ jusqu'à la réponse.
 | `GET` | `/` | non | Index du service |
 | `GET` | `/openapi.json` | non | Spécification OpenAPI 3.1 |
 | `GET` | `/v1/loans/schedule?capital=&taux=&mois=&methode=…` | oui | Échéancier de prêt |
+| `GET` | `/v1/loans/capacity?mensualite=&taux=&mois=…` | oui | Capital maximal empruntable |
 | `GET` | `/v1/baremes` | oui | Taux effectifs moyens en vigueur, par catégorie |
 | `GET` | `/v1/simulations?limite=&non_conformes=` | oui | Piste d'audit des échéanciers produits |
 | `GET` | `/health` | non | État du service ; `503` si le binaire COBOL manque |
@@ -242,7 +269,8 @@ plafond parce que le `HEALTHCHECK` du conteneur s'appuie dessus.
 | `RATE_LIMIT_PER_MINUTE` | `30` | Requêtes par minute et par adresse IP |
 | `CORS_ORIGINS` | vide | Origines navigateur autorisées, séparées par des virgules. Vide = aucune origine croisée. |
 | `PORT` | `3000` | Port d'écoute |
-| `COBOL_PROGRAM_PATH` | `/app/bin/loan_amortization` | Binaire COBOL compilé |
+| `COBOL_PROGRAM_PATH` | `/app/bin/loan_amortization` | Binaire COBOL de l'échéancier |
+| `COBOL_CAPACITY_PATH` | `/app/bin/loan_capacity` | Binaire COBOL du calcul inverse |
 | `DATABASE_URL` | — | Adresse PostgreSQL. **Obligatoire** : le service ne démarre pas sans base. |
 | `COMPUTE_TIMEOUT_SECONDS` | `5` | Délai maximal d'un calcul. Au-delà, le processus COBOL est tué et la requête rend `504`. Un échéancier de 600 mois avec résolution du TEG prend une vingtaine de millisecondes. |
 | `APP_ENV` | vide | `production` rend `API_KEY` obligatoire |
@@ -295,6 +323,7 @@ Il faut GnuCOBOL (`cobc`) et Go 1.24 ou plus.
 ```sh
 mkdir -p bin
 cobc -x -free cobol/loan-amortization.cbl -o bin/loan_amortization
+cobc -x -free cobol/loan-capacity.cbl -o bin/loan_capacity
 go test ./...
 go run ./cmd/cobol-api
 ```
@@ -375,6 +404,7 @@ contrôle. La table porte un index partiel pour cette requête.
 
 ```
 cobol/loan-amortization.cbl   règles métier et arithmétique exacte
+cobol/loan-capacity.cbl       calcul inverse, par dichotomie
 internal/loan/                formatage de la demande, appel du binaire, lecture
 internal/api/                 routes, authentification, débit, en-têtes
 internal/db/                  pool, migrations, barèmes, piste d'audit

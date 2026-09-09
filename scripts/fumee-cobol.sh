@@ -5,10 +5,11 @@
 # attendu ne vivent qu'ici. Les avoir recopies a trois endroits avait deja
 # produit un build casse lorsque le format d'entree a change.
 #
-# Usage : fumee-cobol.sh <chemin-du-binaire>
+# Usage : fumee-cobol.sh <amortissement> <capacite>
 set -e
 
-binaire="${1:?usage: fumee-cobol.sh <chemin-du-binaire>}"
+binaire="${1:?usage: fumee-cobol.sh <amortissement> <capacite>}"
+capacite="${2:?usage: fumee-cobol.sh <amortissement> <capacite>}"
 
 # 250 000,000 dinars a 8,5 % sur 240 mois, annuite constante, sans frais,
 # sans assurance et sans verification du taux excessif.
@@ -36,4 +37,17 @@ if [ "$recues" -ne "$lignes_attendues" ]; then
     exit 1
 fi
 
-echo "test de fumee : OK ($recues lignes, mensualite de reference conforme)"
+# Le calcul inverse doit retrouver un capital dont la mensualite tient dans le
+# budget : la boucle se referme sur elle-meme.
+# Budget 2169,558 DT a 8,5 % sur 240 mois, annuite constante, sans assurance.
+entree_capacite="0000000216955808500000024000000000AN"
+attendu_capacite="^C00000250000048"
+
+sortie_capacite=$(echo "$entree_capacite" | "$capacite")
+if ! echo "$sortie_capacite" | grep -q "$attendu_capacite"; then
+    echo "test de fumee : capacite inattendue" >&2
+    echo "$sortie_capacite" >&2
+    exit 1
+fi
+
+echo "test de fumee : OK ($recues lignes, mensualite et capacite de reference conformes)"
