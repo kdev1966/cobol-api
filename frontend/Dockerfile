@@ -25,5 +25,8 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
 
+# 127.0.0.1 et non localhost : celui-ci resout d'abord en ::1, et nginx
+# n'ecoute qu'en IPv4 ici. Le sondage echouait alors que le service repondait,
+# ce qui suffit a faire sortir un conteneur sain de la rotation.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget -qO- http://localhost/ >/dev/null || exit 1
+    CMD wget -qO- http://127.0.0.1/ >/dev/null || exit 1
