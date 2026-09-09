@@ -1,13 +1,60 @@
 # docker-compose.yml
+#
+# Trois services : PostgreSQL, l'API Go qui pilote les programmes COBOL, et le
+# frontend React servi par nginx.
+#
+# Le frontend est servi depuis une origine distincte de l'API. CORS_ORIGINS
+# doit donc porter l'origine du navigateur — celle par laquelle il joint le
+# frontend — sans quoi le navigateur refusera les reponses de l'API.
 
 services:
+  base:
+    image: postgres:17-alpine
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-cobol_api}
+      - POSTGRES_USER=${POSTGRES_USER:-cobol_api}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?definir POSTGRES_PASSWORD, voir .env.example}
+    volumes:
+      - donnees:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cobol_api} -d ${POSTGRES_DB:-cobol_api}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   cobol-api:
     build: .
     ports:
       - "3000:3000"
-    volumes:
-      - ./cobol:/app/cobol # Fichiers COBOL
-      - ./database:/app/database # Persistance base de données
     environment:
-      - NODE_ENV=production
+      - APP_ENV=production
+      # Le moteur calcule des echeanciers de credit : sans API_KEY, le serveur
+      # refuse de demarrer en production. Voir .env.example.
+      - API_KEY=${API_KEY:-}
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-30}
+      # L'origine depuis laquelle le navigateur charge le frontend.
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:8080}
+      - DATABASE_URL=postgres://${POSTGRES_USER:-cobol_api}:${POSTGRES_PASSWORD}@base:5432/${POSTGRES_DB:-cobol_api}?sslmode=disable
+    depends_on:
+      base:
+        condition: service_healthy
     restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        # Figee au build : Vite substitue import.meta.env a la compilation,
+        # l'origine ne peut pas se lire au demarrage du conteneur. C'est
+        # l'adresse par laquelle le NAVIGATEUR joint l'API, non celle du
+        # reseau interne de Compose.
+        - VITE_API_URL=${VITE_API_URL:-http://localhost:3000}
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      - cobol-api
+    restart: unless-stopped
+
+volumes:
+  donnees:

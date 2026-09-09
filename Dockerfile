@@ -1,42 +1,87 @@
 #  Dockerfile
 
-FROM ubuntu:22.04
+# --- Compilation du programme COBOL -----------------------------------------
+FROM debian:12 AS cobol-builder
 
-# Éviter les interactions pendant l'installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Mettre à jour les paquets et installer les dépendances
+# GnuCOBOL traduit en C : le paquet tire le compilateur dont il a besoin.
 RUN apt-get update && \
-    apt-get install -y \
-    build-essential \
-    gnucobol \
-    nodejs \
-    npm \
-    curl \
+    apt-get install -y --no-install-recommends gnucobol \
     && rm -rf /var/lib/apt/lists/*
 
-# Définir le répertoire de travail
+WORKDIR /src
+COPY cobol/ ./cobol/
+COPY scripts/ ./scripts/
+
+# Compilation suivie du test de fumee : le build echoue si la mensualite de
+# reference ou le nombre de lignes changent. Le script est partage avec la CI,
+# pour que le cas de reference ne vive qu'a un seul endroit.
+RUN mkdir -p /out && \
+    cobc -x -free cobol/loan-amortization.cbl -o /out/loan_amortization && \
+    cobc -x -free cobol/loan-capacity.cbl -o /out/loan_capacity && \
+    sh scripts/fumee-cobol.sh /out/loan_amortization /out/loan_capacity
+
+# --- Compilation du service Go ----------------------------------------------
+FROM golang:1.26-bookworm AS go-builder
+
+# libcob permet d'executer le binaire COBOL pendant les tests.
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libcob4 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# Dependances avant les sources : la couche reste en cache tant que les
+# manifestes ne bougent pas.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+# Le repertoire entier plutot que chaque binaire : un programme ajoute sans
+# ligne de copie correspondante avait deja produit une image amputee.
+COPY --from=cobol-builder /out/ ./bin/
+
+# La suite de tests tourne a la construction, invariants de l'echeancier
+# compris : une regression bloque l'image.
+RUN go vet ./... && go test ./...
+
+# CGO desactive : le binaire est statique et ne depend pas de la libc de
+# l'image d'execution.
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cobol-api ./cmd/cobol-api
+
+# --- Execution : ni compilateur C, ni compilateur COBOL, ni chaine Go -------
+FROM debian:12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# libcob4 suffit a executer le programme COBOL ; curl sert au HEALTHCHECK.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    libcob4 \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Copier tous les fichiers
-COPY . .
+COPY --from=cobol-builder /out/ ./bin/
+COPY --from=go-builder /out/cobol-api ./cobol-api
 
-# Script de débogage et compilation
-COPY debug_cobol.sh /app/debug_cobol.sh
-RUN chmod +x /app/debug_cobol.sh
+# Utilisateur non privilegie. Le service n'ecrit rien sur disque.
+RUN useradd --system --create-home --shell /usr/sbin/nologin cobolapi
+USER cobolapi
 
-# Exécuter le script de débogage
-RUN /app/debug_cobol.sh
+ENV COBOL_PROGRAM_PATH=/app/bin/loan_amortization \
+    COBOL_CAPACITY_PATH=/app/bin/loan_capacity \
+    APP_ENV=production \
+    PORT=3000
 
-# Copier package.json et installer les dépendances Node.js
-COPY nodejs/package*.json ./nodejs/
-RUN cd nodejs && npm install
-
-# Créer un volume pour la base de données
-VOLUME /app/database
-
-# Exposer le port
 EXPOSE 3000
 
-# Commande de démarrage
-CMD ["node", "nodejs/server.js"]
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -fsS http://localhost:3000/health || exit 1
+
+CMD ["/app/cobol-api"]

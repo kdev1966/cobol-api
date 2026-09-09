@@ -1,10 +1,11 @@
-# Node.js dependencies
-node_modules/
-npm-debug.log*
+# Binaires COBOL et Go compiles
+bin/
+/cobol-api
 
 # Environment and sensitive files
 .env
 .env.*
+!.env.example
 
 # Logs
 *.log
@@ -12,3 +13,12 @@ npm-debug.log*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+
+# Sorties de Playwright
+.playwright-mcp/
+*.png

@@ -1,0 +1,583 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Tests et analyse statique
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: cobol_api
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://postgres:ci@localhost:5432/cobol_api?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Installer GnuCOBOL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gnucobol
+
+      - name: Compiler le programme COBOL
+        run: |
+          mkdir -p bin
+          cobc -x -free cobol/loan-amortization.cbl -o bin/loan_amortization
+          cobc -x -free cobol/loan-capacity.cbl -o bin/loan_capacity
+
+      # Le meme script que dans l'image : le cas de reference ne vit qu'a un
+      # seul endroit.
+      - name: Test de fumee du binaire COBOL
+        run: sh scripts/fumee-cobol.sh ./bin/loan_amortization ./bin/loan_capacity
+
+      - name: gofmt
+        run: |
+          non_formates=$(gofmt -l ./cmd ./internal)
+          if [ -n "$non_formates" ]; then
+            echo "Fichiers non formates :"
+            echo "$non_formates"
+            gofmt -d ./cmd ./internal
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # -race couvre le limiteur de debit, seul etat partage du service.
+      #
+      # -shuffle interdit qu'un test ne passe que parce qu'un autre l'a precede.
+      # Les tests de base de donnees ont deja dependu de cet ordre : ils ne
+      # passaient que sur une base deja migree, ce qui se voyait ici et pas en
+      # developpement, ou la base survit d'une execution a l'autre.
+      - name: go test
+        run: go test -race -shuffle=on ./...
+
+      # Le lecteur d'enregistrements decoupe positionnellement la sortie d'un
+      # sous-processus : c'est la que le fuzzing trouve ce que les tests
+      # ecrits a la main n'atteignent pas.
+      - name: Fuzzing du lecteur
+        run: |
+          go test ./internal/loan/ -run '^$' -fuzz FuzzLireSortie -fuzztime 60s
+          go test ./internal/loan/ -run '^$' -fuzz FuzzDecimalVersEntier -fuzztime 30s
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  lint:
+    name: Analyse statique approfondie
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Le linter est compile avec la chaine du module plutot qu'installe en
+      # binaire : l'action officielle posait un golangci-lint bati avec Go
+      # 1.24, qui refuse d'analyser un module ciblant 1.26.6. Le compiler ici
+      # rend ce decalage impossible. La version est figee pour qu'une
+      # publication amont ne casse pas la CI un jour sans rapport.
+      - name: golangci-lint
+        run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run ./...
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # npm ci plutot que npm install : il exige que le verrou soit coherent
+      # avec le manifeste, et une derive entre les deux doit casser la CI
+      # plutot que de passer inapercue.
+      - name: Installer les dependances
+        working-directory: frontend
+        run: npm ci
+
+      # Le typage est verifie a part du build : une erreur de type doit se
+      # signaler comme telle, non comme un echec de compilation.
+      - name: Verifier le typage
+        working-directory: frontend
+        run: npx tsc -b --noEmit
+
+      - name: Batir
+        working-directory: frontend
+        run: npm run build
+
+      - name: Verifier les vulnerabilites des dependances
+        working-directory: frontend
+        run: npm audit --audit-level=high
+
+  image:
+    name: Image et service
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: cobol_api
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construire l'image
+        run: docker build -t cobol-api:ci .
+
+      - name: Demarrer le conteneur
+        run: |
+          # Reseau de l'hote : le conteneur doit joindre le PostgreSQL du job.
+          docker run -d --name ci --network host \
+            -e API_KEY=cle-de-ci -e RATE_LIMIT_PER_MINUTE=1000 \
+            -e DATABASE_URL='postgres://postgres:ci@localhost:5432/cobol_api?sslmode=disable' \
+            cobol-api:ci
+          for i in $(seq 1 30); do
+            curl -sf localhost:3000/health >/dev/null && exit 0
+            sleep 1
+          done
+          echo "le service n'a pas demarre"
+          docker logs ci
+          exit 1
+
+      # Verifie l'artefact reel, pas seulement le code : le cas de reference
+      # doit ressortir au centime a travers toute la chaine.
+      - name: Verifier le cas de reference
+        run: |
+          reponse=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240')
+          echo "$reponse" | grep -q '"premiere_mensualite":2169.558'
+          echo "$reponse" | grep -q '"derniere_mensualite":2169.614'
+          echo "$reponse" | grep -q '"total_interets":270693.976'
+          echo "$reponse" | grep -q '"n":240,"echeance":2169.614'
+          echo "$reponse" | grep -q '"methode":"annuite_constante"'
+
+      # Les deux autres methodes doivent repondre et se distinguer.
+      - name: Verifier les methodes capital constant et in fine
+        run: |
+          lineaire=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/schedule?capital=120000.000&taux=11.23&mois=60&methode=capital_constant')
+          echo "$lineaire" | grep -q '"total_interets":34251.500'
+
+          in_fine=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/schedule?capital=120000.000&taux=11.23&mois=60&methode=in_fine')
+          echo "$in_fine" | grep -q '"total_interets":67380.000'
+          echo "$in_fine" | grep -q '"n":60,"echeance":121123.000'
+
+      - name: Verifier le refus d'une methode inconnue
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/schedule?capital=1000&taux=3&mois=12&methode=lineaire')
+          test "$code" = "400"
+
+      # Les frais et l'assurance changent les flux : le TAEG doit bouger, et
+      # ces valeurs sont recoupees avec une dichotomie independante en Python.
+      - name: Verifier les frais et l'assurance
+        run: |
+          base='http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240'
+
+          nu=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base")
+          echo "$nu" | grep -q '"teg":8.50'
+          echo "$nu" | grep -q '"total_assurance":0.000'
+
+          frais=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base&frais_dossier=1500.000")
+          echo "$frais" | grep -q '"teg":8.58'
+          echo "$frais" | grep -q '"total_frais":1500.000'
+
+          assur=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base&taux_assurance=0.36&assiette_assurance=capital_initial")
+          echo "$assur" | grep -q '"teg":8.97'
+          echo "$assur" | grep -q '"total_assurance":18000.000'
+          echo "$assur" | grep -q '"assurance":75.000'
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            "$base&frais_dossier=999999999999.999")
+          test "$code" = "400"
+
+      # Loi n° 99-64 : est excessif tout pret dont le TEG excede de plus du
+      # cinquieme le taux effectif moyen de la categorie. Le cas montre
+      # l'interet de la regle : un credit licite nu devient excessif une fois
+      # l'assurance integree aux flux.
+      - name: Verifier le verdict de taux excessif
+        run: |
+          logement='http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240'
+          # Credit a la consommation, TEM publie 11,23 donc seuil 13,48.
+          conso='http://localhost:3000/v1/loans/schedule?capital=60000.000&taux=13&mois=60&tem=11.23'
+
+          sans=$(curl -sf -H 'X-API-Key: cle-de-ci' "$logement")
+          echo "$sans" | grep -q '"conforme":null'
+          echo "$sans" | grep -q '"seuil_excessif":null'
+
+          licite=$(curl -sf -H 'X-API-Key: cle-de-ci' "$conso")
+          echo "$licite" | grep -q '"teg":13.00'
+          echo "$licite" | grep -q '"seuil_excessif":13.48'
+          echo "$licite" | grep -q '"conforme":true'
+          echo "$licite" | grep -q '"marge":0.48'
+
+          excessif=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            "$conso&taux_assurance=1.5&assiette_assurance=capital_initial")
+          echo "$excessif" | grep -q '"teg":15.41'
+          echo "$excessif" | grep -q '"conforme":false'
+          echo "$excessif" | grep -q '"marge":-1.93'
+
+      # Le bareme resout le taux effectif moyen et le verdict cite l'arrete.
+      # Le calcul inverse doit rendre un capital dont l'echeancier produit
+      # exactement la mensualite annoncee, sans depasser le budget.
+      - name: Verifier la capacite d'emprunt
+        run: |
+          cap=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/capacity?mensualite=2000.000&taux=8.5&mois=240&categorie=credits_logement')
+          echo "$cap" | grep -q '"capital":230461.737'
+          echo "$cap" | grep -q '"mensualite":2000.000'
+          echo "$cap" | grep -q '"premiere_mensualite":2000.000'
+          echo "$cap" | grep -q '"arrete":"Arrete du 28 juillet 2026"'
+          # Le calcul inverse produit une offre : il laisse une trace.
+          echo "$cap" | grep -q '"simulation_id":'
+
+          # Plus l'amortissement est lent, plus on peut emprunter.
+          fine=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/capacity?mensualite=2000.000&taux=8.5&mois=240&methode=in_fine')
+          echo "$fine" | grep -q '"capital":282353.011'
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/capacity?taux=8.5&mois=240')
+          test "$code" = "400"
+
+      # Pendant la franchise, seuls les interets sont dus et le capital reste
+      # intact ; le credit en devient plus cher.
+      - name: Verifier le differe d'amortissement
+        run: |
+          base='http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240'
+
+          sans=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base")
+          echo "$sans" | grep -q '"total_interets":270693.976'
+
+          avec=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base&differe=24")
+          echo "$avec" | grep -q '"total_interets":281446.923'
+          echo "$avec" | grep -q '"n":1,"echeance":1770.833,"interets":1770.833,"capital":0.000'
+          echo "$avec" | grep -q '"n":24,"echeance":1770.833'
+          echo "$avec" | grep -q '"n":25,"echeance":2263.644'
+
+          # Un differe qui ne laisse aucune echeance amortissante est refuse.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            "$base&differe=240")
+          test "$code" = "400"
+
+          # Il reduit aussi la capacite d'emprunt.
+          cap=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/capacity?mensualite=2000.000&taux=8.5&mois=240&differe=24')
+          echo "$cap" | grep -q '"capital":220882.879'
+
+      # Solder par anticipation economise les interets restants, moins
+      # l'indemnite. Solder a la derniere echeance revient au terme.
+      # Sous franchise totale, rien n'est verse pendant le differe et les
+      # interets grossissent le capital, qui est ensuite amorti.
+      - name: Verifier le differe total
+        run: |
+          b='http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240&differe=24'
+
+          t=$(curl -sf -H 'X-API-Key: cle-de-ci' "$b&type_differe=total")
+          echo "$t" | grep -q '"interets_capitalises":46148.691'
+          echo "$t" | grep -q '"total_interets":329204.195'
+          # Rien n'est du le premier mois, et tout l'interet est capitalise.
+          echo "$t" | grep -q '"n":1,"echeance":0.000,"interets":1770.833,"capital":0.000,"assurance":0.000,"mensualite":0.000,"solde":251770.833,"capitalise":1770.833'
+
+          # La franchise partielle ne capitalise rien et coute moins cher.
+          p=$(curl -sf -H 'X-API-Key: cle-de-ci' "$b&type_differe=partiel")
+          echo "$p" | grep -q '"interets_capitalises":0.000'
+          echo "$p" | grep -q '"total_interets":281446.923'
+
+          # Qualifier une franchise qui n'existe pas est une erreur de saisie.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240&type_differe=total')
+          test "$code" = "400"
+
+          # Le calcul inverse ne modelise pas la capitalisation : il refuse.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/capacity?mensualite=2000.000&taux=8.5&mois=240&differe=24&type_differe=total')
+          test "$code" = "400"
+
+      - name: Verifier le remboursement anticipe
+        run: |
+          base='http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240'
+
+          a=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base&mois_remboursement_anticipe=120&indemnite=1")
+          echo "$a" | grep -q '"solde_restant":174984.575'
+          echo "$a" | grep -q '"indemnite":1749.846'
+          echo "$a" | grep -q '"total_terme":520693.976'
+          echo "$a" | grep -q '"economie":83612.595'
+          echo "$a" | grep -q '"interets_economises":85362.441'
+
+          # Sans demande, aucun bloc.
+          if curl -sf -H 'X-API-Key: cle-de-ci' "$base" | grep -q '"anticipe"'; then
+            echo "un bloc anticipe est rendu sans demande" >&2
+            exit 1
+          fi
+
+          # Une indemnite sans mois n'a pas d'objet.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            "$base&indemnite=1")
+          test "$code" = "400"
+
+      # Rembourser une part du capital : la duree raccourcit, ou l'echeance
+      # s'allege. A montant egal, raccourcir la duree economise davantage.
+      - name: Verifier le remboursement partiel
+        run: |
+          base='http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240'
+          part="&mois_remboursement_anticipe=120&indemnite=1&montant_remboursement_anticipe=50000.000"
+
+          d=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            "$base$part&mode_remboursement_anticipe=duree_reduite")
+          echo "$d" | grep -q '"duree":195'
+          echo "$d" | grep -q '"echeance_suivante":2169.558'
+          echo "$d" | grep -q '"total":472019.531'
+          echo "$d" | grep -q '"economie":48674.445'
+          # L'indemnite porte sur le capital rembourse, non sur le solde.
+          echo "$d" | grep -q '"indemnite":500.000'
+
+          m=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            "$base$part&mode_remboursement_anticipe=echeance_reduite")
+          echo "$m" | grep -q '"duree":240'
+          echo "$m" | grep -q '"echeance_suivante":1549.630'
+          echo "$m" | grep -q '"economie":23891.432'
+
+          # L'echeancier rendu reste celui du contrat.
+          test "$(echo "$d" | grep -o '"n":' | wc -l | tr -d ' ')" = "240"
+
+          # Un montant superieur au capital restant du ne se voit qu'une fois
+          # l'echeancier deroule : c'est une erreur de saisie, pas une panne.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            "$base&mois_remboursement_anticipe=120&mode_remboursement_anticipe=duree_reduite&montant_remboursement_anticipe=200000.000")
+          test "$code" = "400"
+
+          # Solder la totalite et n'en rembourser qu'une part s'excluent.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            "$base$part&mode_remboursement_anticipe=total")
+          test "$code" = "400"
+
+          # Sans capital amorti avant le terme, pas de duree a raccourcir.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            "$base$part&methode=in_fine&mode_remboursement_anticipe=duree_reduite")
+          test "$code" = "400"
+
+      # Les dossiers appartiennent a une personne : ils sont gardes par une
+      # session d'agent, non par la cle d'API.
+      - name: Verifier les comptes et les dossiers
+        run: |
+          # Pas d'auto-inscription : le compte se cree en ligne de commande.
+          printf 'un mot de passe solide\n' | docker exec -i ci \
+            /app/cobol-api creer-agent -identifiant agent.ci \
+            -nom 'Agent CI' -agence 'Tunis Centre'
+
+          # Le mot de passe n'est jamais conserve en clair.
+          clair=$(PGPASSWORD=ci psql -h localhost -U postgres -d cobol_api -tAc \
+            "SELECT count(*) FROM agents WHERE mot_de_passe NOT LIKE '\$argon2id\$%'")
+          test "$clair" = "0"
+
+          rep=$(curl -sf -X POST -H 'Content-Type: application/json' \
+            -d '{"identifiant":"agent.ci","mot_de_passe":"un mot de passe solide"}' \
+            http://localhost:3000/v1/auth/connexion)
+          jeton=$(echo "$rep" | sed -n 's/.*"jeton":"\([^"]*\)".*/\1/p')
+          test -n "$jeton"
+
+          # Le jeton n'est pas conserve en clair non plus.
+          enclair=$(PGPASSWORD=ci psql -h localhost -U postgres -d cobol_api -tAc \
+            "SELECT count(*) FROM sessions WHERE encode(empreinte,'escape') = '$jeton'")
+          test "$enclair" = "0"
+
+          A="Authorization: Bearer $jeton"
+          curl -sf -H "$A" http://localhost:3000/v1/auth/moi | grep -q '"identifiant":"agent.ci"'
+
+          # Un mot de passe faux et un identifiant inconnu rendent le meme
+          # message : les distinguer permettrait d'enumerer les comptes.
+          a=$(curl -s -X POST -H 'Content-Type: application/json' \
+            -d '{"identifiant":"agent.ci","mot_de_passe":"faux"}' \
+            http://localhost:3000/v1/auth/connexion)
+          b=$(curl -s -X POST -H 'Content-Type: application/json' \
+            -d '{"identifiant":"personne","mot_de_passe":"faux"}' \
+            http://localhost:3000/v1/auth/connexion)
+          test "$a" = "$b"
+
+          # Un dossier sans session est refuse.
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/v1/dossiers)
+          test "$code" = "401"
+
+          # Cycle de vie complet.
+          d=$(curl -sf -X POST -H "$A" -H 'Content-Type: application/json' \
+            -d '{"reference":"PRT-CI-1","capital":"250000","taux":"8.5","mois":240,"categorie":"credits_logement"}' \
+            http://localhost:3000/v1/dossiers)
+          echo "$d" | grep -q '"statut":"brouillon"'
+          id=$(echo "$d" | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)
+
+          # La reference est unique dans l'agence.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$A" \
+            -H 'Content-Type: application/json' \
+            -d '{"reference":"PRT-CI-1","capital":"1000","taux":"5","mois":12}' \
+            http://localhost:3000/v1/dossiers)
+          test "$code" = "409"
+
+          # Un brouillon ne s'accorde pas sans passer par l'instruction.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$A" \
+            -H 'Content-Type: application/json' -d '{"statut":"accorde"}' \
+            "http://localhost:3000/v1/dossiers/$id/statut")
+          test "$code" = "409"
+
+          curl -sf -X POST -H "$A" -H 'Content-Type: application/json' \
+            -d '{"statut":"en_instruction","note":"transmis"}' \
+            "http://localhost:3000/v1/dossiers/$id/statut" | grep -q '"statut":"en_instruction"'
+
+          # Une fois instruit, les parametres ne bougent plus.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH -H "$A" \
+            -H 'Content-Type: application/json' \
+            -d '{"reference":"PRT-CI-1","capital":"999","taux":"5","mois":12}' \
+            "http://localhost:3000/v1/dossiers/$id")
+          test "$code" = "409"
+
+          curl -sf -X POST -H "$A" -H 'Content-Type: application/json' \
+            -d '{"statut":"accorde","note":"accord du comite"}' \
+            "http://localhost:3000/v1/dossiers/$id/statut" | grep -q '"statut":"accorde"'
+
+          # L'echeancier du dossier passe par le meme moteur, et la simulation
+          # produite y est rattachee.
+          e=$(curl -sf -H "$A" "http://localhost:3000/v1/dossiers/$id/echeancier")
+          echo "$e" | grep -q '"mensualite":2169.558'
+          echo "$e" | grep -q '"conforme":true'
+          sim=$(echo "$e" | sed -n 's/.*"simulation_id":\([0-9]*\).*/\1/p')
+          curl -sf -H "$A" "http://localhost:3000/v1/dossiers/$id" \
+            | grep -q "\"simulation_id\":$sim"
+
+          # L'historique retient qui a decide quoi.
+          h=$(curl -sf -H "$A" "http://localhost:3000/v1/dossiers/$id")
+          echo "$h" | grep -q '"agent_nom":"Agent CI"'
+          test "$(echo "$h" | grep -o '"statut_apres"' | wc -l | tr -d ' ')" = "3"
+
+          # La deconnexion revoque le jeton.
+          curl -sf -X POST -H "$A" http://localhost:3000/v1/auth/deconnexion
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "$A" \
+            http://localhost:3000/v1/auth/moi)
+          test "$code" = "401"
+
+      - name: Verifier le bareme
+        run: |
+          liste=$(curl -sf -H 'X-API-Key: cle-de-ci' http://localhost:3000/v1/baremes)
+          echo "$liste" | grep -q '"count":8'
+          echo "$liste" | grep -q '"categorie":"credits_consommation","semestre":"2026S1","tem":"11.23"'
+
+          par_categorie=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/schedule?capital=60000.000&taux=13&mois=60&categorie=credits_consommation')
+          echo "$par_categorie" | grep -q '"arrete":"Arrete du 28 juillet 2026"'
+          echo "$par_categorie" | grep -q '"tem":11.23'
+          echo "$par_categorie" | grep -q '"seuil_excessif":13.48'
+          echo "$par_categorie" | grep -q '"conforme":true'
+
+          # Categorie inconnue et redondance avec tem : refusees en 400.
+          for q in 'categorie=credits_lunaires' 'categorie=credits_logement&tem=10.25'; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+              "http://localhost:3000/v1/loans/schedule?capital=60000.000&taux=13&mois=60&$q")
+            test "$code" = "400"
+          done
+
+      # Chaque echeancier produit doit laisser une trace, sans jamais stocker
+      # la cle d'API.
+      - name: Verifier la piste d'audit
+        run: |
+          reponse=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/schedule?capital=60000.000&taux=13&mois=60&categorie=credits_consommation&taux_assurance=1.5&assiette_assurance=capital_initial')
+          echo "$reponse" | grep -q '"simulation_id":'
+
+          audit=$(curl -sf -H 'X-API-Key: cle-de-ci' 'http://localhost:3000/v1/simulations?limite=50')
+          echo "$audit" | grep -q '"teg":"15.41"'
+          echo "$audit" | grep -q '"arrete":"Arrete du 28 juillet 2026"'
+          # La cle ne doit jamais apparaitre, ni en clair ni en fragment.
+          if echo "$audit" | grep -q 'cle-de-ci'; then
+            echo "la cle d'API figure dans la piste d'audit" >&2
+            exit 1
+          fi
+
+          excessifs=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/simulations?non_conformes=true')
+          echo "$excessifs" | grep -q '"conforme":false'
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/simulations?limite=999')
+          test "$code" = "400"
+
+      - name: Verifier la specification OpenAPI
+        run: |
+          spec=$(curl -sf http://localhost:3000/openapi.json)
+          echo "$spec" | grep -q '"openapi"'
+          echo "$spec" | grep -q '/v1/loans/schedule'
+          echo "$spec" | grep -q '/v1/baremes'
+          echo "$spec" | grep -q '/v1/simulations'
+          echo "$spec" | grep -q '/v1/loans/capacity'
+          # Le chemin non versionne ne doit plus repondre.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/loans/schedule?capital=1000&taux=3&mois=12')
+          test "$code" = "404"
+
+      - name: Verifier l'identifiant de correlation
+        run: |
+          curl -sf -D - -o /dev/null http://localhost:3000/health | grep -qi '^x-request-id:'
+
+      # Les migrations doivent s'appliquer au demarrage et la sante refleter
+      # l'etat reel de la base.
+      - name: Verifier la base et ses migrations
+        run: |
+          curl -sf http://localhost:3000/health | grep -q '"databaseReachable":true'
+          n=$(docker exec ci sh -c 'echo' >/dev/null 2>&1; \
+            PGPASSWORD=ci psql -h localhost -U postgres -d cobol_api -tAc \
+            'SELECT count(*) FROM taux_effectifs_moyens')
+          test "$n" = "8"
+          # Autant de lignes que de fichiers de migration embarques.
+          attendu=$(ls internal/db/migrations/*.sql | wc -l | tr -d ' ')
+          v=$(PGPASSWORD=ci psql -h localhost -U postgres -d cobol_api -tAc \
+            'SELECT count(*) FROM schema_migrations')
+          test "$v" = "$attendu"
+
+      - name: Verifier le refus sans cle
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            'http://localhost:3000/v1/loans/schedule?capital=1000&taux=3&mois=12')
+          test "$code" = "401"
+
+      - name: Verifier le refus d'un parametre hors bornes
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/schedule?capital=0&taux=3&mois=12')
+          test "$code" = "400"
+
+      - name: Journaux du conteneur en cas d'echec
+        if: failure()
+        run: docker logs ci

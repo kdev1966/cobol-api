@@ -1,0 +1,1823 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "cobol-api",
+    "version": "1.0.0",
+    "description": "Moteur d'amortissement de pret ecrit en COBOL, expose en REST, pour le marche tunisien.\n\nLes montants sont en dinars, exprimes au millime : le dinar se divise en mille. Ils sont rendus comme des nombres JSON a trois decimales exactes, produits par une arithmetique decimale a virgule fixe, et ne transitent jamais par un flottant binaire.\n\nSix invariants sont tenus : la somme des parts de capital egale exactement le capital emprunte, la somme des echeances egale exactement capital plus interets, le solde apres la derniere echeance est exactement nul, chaque ligne verifie echeance = capital + interets, chaque ligne verifie mensualite = echeance + assurance, et le total verse egale la somme des mensualites. La derniere echeance absorbe le residu d'arrondi.\n\nLe TEG est calcule selon le decret n° 2000-462 du 21 fevrier 2000 : le taux de periode est resolu par methode actuarielle sur l'ensemble des versements dus, interets, frais, commissions et assurance compris, puis annualise de facon proportionnelle et exprime avec deux decimales. Sans frais ni assurance, il egale le taux nominal.\n\nLe verdict de taux excessif applique la loi n° 99-64 du 15 juillet 1999 : est excessif tout pret dont le TEG excede de plus du cinquieme le taux effectif moyen publie pour la categorie de concours.",
+    "license": {
+      "name": "Proprietaire"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000",
+      "description": "Developpement local"
+    }
+  ],
+  "tags": [
+    {
+      "name": "credit",
+      "description": "Calculs de credit"
+    },
+    {
+      "name": "service",
+      "description": "Etat et description du service"
+    }
+  ],
+  "security": [
+    {
+      "cleAPI": []
+    }
+  ],
+  "paths": {
+    "/": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Index du service",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Description du service et liste des endpoints",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Etat du service",
+        "description": "Verifie la presence du binaire COBOL. Le HEALTHCHECK du conteneur s'appuie sur cet endpoint, qui reste ouvert et hors plafond de debit.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Service operationnel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sante"
+                },
+                "example": {
+                  "status": "OK",
+                  "timestamp": "2026-09-08T21:38:38Z",
+                  "programExists": true
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Binaire COBOL introuvable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sante"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Cette specification",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Document OpenAPI",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/loans/schedule": {
+      "get": {
+        "tags": [
+          "credit"
+        ],
+        "summary": "Echeancier de pret",
+        "description": "Produit l'echeancier complet et son recapitulatif, TAEG compris. Le TAEG est resolu par dichotomie sur les echeances reellement arrondies, non deduit du taux nominal.",
+        "operationId": "echeancier",
+        "parameters": [
+          {
+            "name": "capital",
+            "in": "query",
+            "required": true,
+            "description": "Montant emprunte en dinars, avec au plus trois decimales (millimes).",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+(\\.\\d{1,3})?$"
+            },
+            "example": "250000.000"
+          },
+          {
+            "name": "taux",
+            "in": "query",
+            "required": true,
+            "description": "Taux nominal annuel en pourcent, avec au plus six decimales. Le taux periodique en est deduit par division par douze (taux proportionnel).",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,2}(\\.\\d{1,6})?$"
+            },
+            "example": "8.5"
+          },
+          {
+            "name": "mois",
+            "in": "query",
+            "required": true,
+            "description": "Duree en mensualites.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600
+            },
+            "example": 240
+          },
+          {
+            "name": "methode",
+            "in": "query",
+            "required": false,
+            "description": "Methode d'amortissement. Les lettres A, C et I sont acceptees comme alias.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "annuite_constante",
+                "capital_constant",
+                "in_fine"
+              ],
+              "default": "annuite_constante"
+            }
+          },
+          {
+            "name": "frais_dossier",
+            "in": "query",
+            "required": false,
+            "description": "Frais de dossier, verses au depart. Ils diminuent ce que l'emprunteur percoit sans reduire ce qu'il rembourse, et font donc monter le TAEG.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+(\\.\\d{1,3})?$",
+              "default": "0"
+            },
+            "example": "1500.000"
+          },
+          {
+            "name": "frais_garantie",
+            "in": "query",
+            "required": false,
+            "description": "Frais de garantie, verses au depart. Meme traitement que les frais de dossier.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+(\\.\\d{1,3})?$",
+              "default": "0"
+            }
+          },
+          {
+            "name": "taux_assurance",
+            "in": "query",
+            "required": false,
+            "description": "Taux annuel d'assurance emprunteur en pourcent. La prime mensuelle en est deduite par division par douze.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,2}(\\.\\d{1,6})?$",
+              "default": "0"
+            },
+            "example": "0.36"
+          },
+          {
+            "name": "assiette_assurance",
+            "in": "query",
+            "required": false,
+            "description": "Assiette de la prime. Un taux d'assurance sans assiette declaree porte sur le capital initial, convention la plus repandue. Les lettres N, I et R sont acceptees comme alias.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "aucune",
+                "capital_initial",
+                "capital_restant_du"
+              ],
+              "default": "aucune"
+            }
+          },
+          {
+            "name": "tem",
+            "in": "query",
+            "required": false,
+            "description": "Taux effectif moyen publie par la Banque Centrale de Tunisie pour la categorie de concours, en pourcent. Fourni, la reponse porte un verdict de taux excessif : le seuil est le TEM majore d'un cinquieme, et le depassement est strict. Omis, le TEG est rendu sans jugement. S'exclut avec categorie.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,2}(\\.\\d{1,2})?$"
+            },
+            "example": "10.25"
+          },
+          {
+            "name": "categorie",
+            "in": "query",
+            "required": false,
+            "description": "Categorie de concours. Le taux effectif moyen est alors lu dans le bareme en vigueur et la reponse cite l'arrete applique. S'exclut avec tem : la categorie determine le taux.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "leasing",
+                "decouverts",
+                "gestion_des_dettes",
+                "credits_consommation",
+                "credits_logement",
+                "credits_moyen_terme",
+                "credits_long_terme",
+                "credits_court_terme"
+              ]
+            },
+            "example": "credits_consommation"
+          },
+          {
+            "name": "differe",
+            "in": "query",
+            "required": false,
+            "description": "Nombre d'echeances en franchise partielle : seuls les interets et l'assurance y sont dus, le capital reste intact. L'amortissement se fait ensuite sur la duree restante, d'ou une echeance plus elevee et un credit plus cher. Les interets ne sont pas capitalises. Doit laisser au moins une echeance amortissante. Sa nature se precise avec type_differe.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 599,
+              "default": 0
+            },
+            "example": 24
+          },
+          {
+            "name": "mois_remboursement_anticipe",
+            "in": "query",
+            "required": false,
+            "description": "Echeance a laquelle simuler le solde par anticipation du capital restant du. La reponse porte alors la comparaison avec la poursuite jusqu'au terme.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600
+            },
+            "example": 120
+          },
+          {
+            "name": "indemnite",
+            "in": "query",
+            "required": false,
+            "description": "Taux d'indemnite applique au capital rembourse, en pourcent. L'indemnite de remboursement anticipe n'est pas encadree par la loi tunisienne mais par le contrat ; les banques pratiquent couramment 1 a 1,5 %. Sans objet sans mois_remboursement_anticipe.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,2}(\\.\\d{1,4})?$",
+              "default": "0"
+            },
+            "example": "1"
+          },
+          {
+            "name": "montant_remboursement_anticipe",
+            "in": "query",
+            "required": false,
+            "description": "Capital rembourse par anticipation, en dinars. Exige un mode autre que total, et sans objet quand le mode est total : solder la totalite du capital et n'en rembourser qu'une part sont deux operations distinctes.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,11}(\\.\\d{1,3})?$"
+            },
+            "example": "50000.000"
+          },
+          {
+            "name": "mode_remboursement_anticipe",
+            "in": "query",
+            "required": false,
+            "description": "Suite donnee au remboursement anticipe : solder la totalite du capital restant du, en rembourser une part et raccourcir la duree, ou en rembourser une part et alleger l'echeance. duree_reduite est sans objet avec la methode in_fine, ou aucun capital n'est amorti avant le terme.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "total",
+                "duree_reduite",
+                "echeance_reduite"
+              ],
+              "default": "total"
+            },
+            "example": "duree_reduite"
+          },
+          {
+            "name": "type_differe",
+            "in": "query",
+            "required": false,
+            "description": "Nature de la franchise. partiel : les interets sont dus chaque mois et le capital reste intact, ils ne se capitalisent donc pas. total : rien n'est verse et les interets viennent grossir le capital, qui est ensuite amorti. Sans objet sans differe. Le calcul de capacite ne modelise que le differe partiel.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "partiel",
+                "total"
+              ],
+              "default": "partiel"
+            },
+            "example": "total"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Echeancier calcule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Reponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Parametre absent ou hors bornes. Le champ fautif est nomme.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                },
+                "example": {
+                  "status": "error",
+                  "champ": "mois",
+                  "message": "doit etre compris entre 1 et 600"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Cle d'API absente ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Plafond de requetes par minute atteint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Echec du moteur de calcul",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Le calcul a depasse son delai",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/baremes": {
+      "get": {
+        "tags": [
+          "credit"
+        ],
+        "summary": "Bareme en vigueur",
+        "description": "Taux effectifs moyens en vigueur, une ligne par categorie de concours. Le seuil du taux excessif n'y figure pas : il se deduit du taux effectif moyen par la regle du cinquieme, portee par le moteur de calcul.",
+        "operationId": "bareme",
+        "responses": {
+          "200": {
+            "description": "Bareme en vigueur",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "count",
+                    "baremes"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "count": {
+                      "type": "integer",
+                      "example": 8
+                    },
+                    "baremes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Bareme"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Cle d'API absente ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Bareme indisponible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/simulations": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Piste d'audit",
+        "description": "Echeanciers produits, du plus recent au plus ancien. Chaque echeancier produit y laisse une trace : l'ecriture est synchrone et son echec fait echouer la requete, une piste d'audit a trous n'en etant pas une.",
+        "operationId": "simulations",
+        "parameters": [
+          {
+            "name": "limite",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 20
+            }
+          },
+          {
+            "name": "non_conformes",
+            "in": "query",
+            "required": false,
+            "description": "A true, restreint aux prets juges excessifs.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Piste d'audit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "count",
+                    "simulations"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "success"
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "simulations": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Simulation"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Limite hors bornes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Cle d'API absente ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Piste d'audit indisponible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/loans/capacity": {
+      "get": {
+        "tags": [
+          "credit"
+        ],
+        "summary": "Capacite d'emprunt",
+        "description": "Calcul inverse : a partir d'une mensualite supportable, le capital maximal empruntable. La reponse porte aussi l'echeancier complet que ce capital produit, son TEG et, si une categorie ou un TEM est fourni, le verdict de taux excessif. Comme l'echeancier, elle laisse une trace dans la piste d'audit. Avec un differe, la contrainte de budget porte sur la premiere echeance amortissante et non sur la franchise, qui ne paie que les interets.",
+        "operationId": "capacite",
+        "parameters": [
+          {
+            "name": "mensualite",
+            "in": "query",
+            "required": true,
+            "description": "Budget mensuel, assurance comprise, en dinars avec au plus trois decimales.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+(\\.\\d{1,3})?$"
+            },
+            "example": "2000.000"
+          },
+          {
+            "name": "taux",
+            "in": "query",
+            "required": true,
+            "description": "Taux nominal annuel en pourcent, avec au plus six decimales. Le taux periodique en est deduit par division par douze (taux proportionnel).",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,2}(\\.\\d{1,6})?$"
+            },
+            "example": "8.5"
+          },
+          {
+            "name": "mois",
+            "in": "query",
+            "required": true,
+            "description": "Duree en mensualites.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600
+            },
+            "example": 240
+          },
+          {
+            "name": "methode",
+            "in": "query",
+            "required": false,
+            "description": "Methode d'amortissement. Les lettres A, C et I sont acceptees comme alias.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "annuite_constante",
+                "capital_constant",
+                "in_fine"
+              ],
+              "default": "annuite_constante"
+            }
+          },
+          {
+            "name": "taux_assurance",
+            "in": "query",
+            "required": false,
+            "description": "Taux annuel d'assurance emprunteur en pourcent. La prime mensuelle en est deduite par division par douze.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,2}(\\.\\d{1,6})?$",
+              "default": "0"
+            },
+            "example": "0.36"
+          },
+          {
+            "name": "assiette_assurance",
+            "in": "query",
+            "required": false,
+            "description": "Assiette de la prime. Un taux d'assurance sans assiette declaree porte sur le capital initial, convention la plus repandue. Les lettres N, I et R sont acceptees comme alias.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "aucune",
+                "capital_initial",
+                "capital_restant_du"
+              ],
+              "default": "aucune"
+            }
+          },
+          {
+            "name": "tem",
+            "in": "query",
+            "required": false,
+            "description": "Taux effectif moyen publie par la Banque Centrale de Tunisie pour la categorie de concours, en pourcent. Fourni, la reponse porte un verdict de taux excessif : le seuil est le TEM majore d'un cinquieme, et le depassement est strict. Omis, le TEG est rendu sans jugement. S'exclut avec categorie.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,2}(\\.\\d{1,2})?$"
+            },
+            "example": "10.25"
+          },
+          {
+            "name": "categorie",
+            "in": "query",
+            "required": false,
+            "description": "Categorie de concours. Le taux effectif moyen est alors lu dans le bareme en vigueur et la reponse cite l'arrete applique. S'exclut avec tem : la categorie determine le taux.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "leasing",
+                "decouverts",
+                "gestion_des_dettes",
+                "credits_consommation",
+                "credits_logement",
+                "credits_moyen_terme",
+                "credits_long_terme",
+                "credits_court_terme"
+              ]
+            },
+            "example": "credits_consommation"
+          },
+          {
+            "name": "differe",
+            "in": "query",
+            "required": false,
+            "description": "Nombre d'echeances en franchise partielle : seuls les interets et l'assurance y sont dus, le capital reste intact. L'amortissement se fait ensuite sur la duree restante, d'ou une echeance plus elevee et un credit plus cher. Les interets ne sont pas capitalises. Doit laisser au moins une echeance amortissante.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 599,
+              "default": 0
+            },
+            "example": 24
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Capacite et echeancier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Reponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Parametre absent ou hors bornes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Cle d'API absente ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Plafond de requetes atteint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Calcul de capacite indisponible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Le calcul a depasse son delai",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erreur"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/connexion": {
+      "post": {
+        "summary": "Ouvrir une session d'agent",
+        "description": "Rend un jeton porteur valable huit heures. L'identifiant inconnu et le mot de passe faux rendent le meme message : les distinguer permettrait d'enumerer les comptes.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "identifiant",
+                  "mot_de_passe"
+                ],
+                "properties": {
+                  "identifiant": {
+                    "type": "string"
+                  },
+                  "mot_de_passe": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session ouverte"
+          },
+          "401": {
+            "description": "Identifiant ou mot de passe incorrect"
+          }
+        }
+      }
+    },
+    "/v1/auth/deconnexion": {
+      "post": {
+        "summary": "Revoquer la session",
+        "description": "Revoquer un jeton deja absent n'est pas une erreur.",
+        "security": [
+          {
+            "SessionAgent": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Session revoquee"
+          }
+        }
+      }
+    },
+    "/v1/auth/moi": {
+      "get": {
+        "summary": "Titulaire de la session",
+        "description": "Permet au frontend de savoir au demarrage si son jeton vaut encore.",
+        "security": [
+          {
+            "SessionAgent": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Succes"
+          }
+        }
+      }
+    },
+    "/v1/dossiers": {
+      "get": {
+        "summary": "Lister les dossiers de l'agence",
+        "description": "Un agent voit les dossiers de son agence et n'en voit aucun autre. La pagination se fait par curseur et non par numero de page : le cout d'un OFFSET croit avec la profondeur, celui d'un curseur non. « total » et « repartition » n'accompagnent que la premiere page, leur calcul couterait autant a chaque page suivante pour le meme chiffre.",
+        "security": [
+          {
+            "SessionAgent": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "statut",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "brouillon",
+                "en_instruction",
+                "accorde",
+                "refuse",
+                "annule"
+              ]
+            }
+          },
+          {
+            "name": "recherche",
+            "in": "query",
+            "required": false,
+            "description": "Prefixe de reference, sans egard a la casse. Les caracteres generiques de LIKE y sont litteraux : un souligne vaut un souligne.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "PRT-2026"
+          },
+          {
+            "name": "curseur",
+            "in": "query",
+            "required": false,
+            "description": "Borne opaque rendue par curseur_suivant. Absente pour la premiere page.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limite",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Succes"
+          }
+        }
+      },
+      "post": {
+        "summary": "Creer un dossier",
+        "description": "Le dossier nait en brouillon. La reference est unique par agence.",
+        "security": [
+          {
+            "SessionAgent": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Dossier"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Dossier cree"
+          },
+          "409": {
+            "description": "Reference deja employee"
+          }
+        }
+      }
+    },
+    "/v1/dossiers/{id}": {
+      "get": {
+        "summary": "Lire un dossier et son historique",
+        "description": "",
+        "security": [
+          {
+            "SessionAgent": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Succes"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Modifier un dossier",
+        "description": "Seul un brouillon est modifiable : une fois transmis a l'instruction, la decision doit porter sur ce qui a ete instruit.",
+        "security": [
+          {
+            "SessionAgent": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Dossier"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Dossier modifie"
+          },
+          "409": {
+            "description": "Dossier fige ou reference prise"
+          }
+        }
+      }
+    },
+    "/v1/dossiers/{id}/statut": {
+      "post": {
+        "summary": "Changer le statut",
+        "description": "Le cycle de vie est une machine a etats : brouillon vers en_instruction ou annule ; en_instruction vers accorde, refuse ou annule ; accorde, refuse et annule sont terminaux.",
+        "security": [
+          {
+            "SessionAgent": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "statut"
+                ],
+                "properties": {
+                  "statut": {
+                    "type": "string"
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Statut change"
+          },
+          "409": {
+            "description": "Transition refusee"
+          }
+        }
+      }
+    },
+    "/v1/dossiers/{id}/echeancier": {
+      "get": {
+        "summary": "Echeancier du dossier",
+        "description": "Calcule l'echeancier a partir des parametres du dossier et y rattache la simulation produite, qui porte le verdict de taux excessif.",
+        "security": [
+          {
+            "SessionAgent": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Succes"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "cleAPI": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "Obligatoire en production ; le serveur refuse de demarrer sans elle."
+      },
+      "SessionAgent": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Jeton de session obtenu par POST /v1/auth/connexion. Le frontend etant servi depuis une autre origine, la session voyage dans l'en-tete Authorization plutot que dans un cookie : un jeton porteur n'est jamais envoye par le navigateur de lui-meme, ce qui supprime le risque CSRF. Le garder en memoire, non dans localStorage."
+      }
+    },
+    "schemas": {
+      "Sante": {
+        "type": "object",
+        "required": [
+          "status",
+          "timestamp",
+          "programExists"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "OK",
+              "ERROR"
+            ]
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "programExists": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Erreur": {
+        "type": "object",
+        "required": [
+          "status",
+          "message"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "error"
+          },
+          "message": {
+            "type": "string"
+          },
+          "champ": {
+            "type": "string",
+            "description": "Present sur les 400 : nomme le parametre fautif."
+          }
+        }
+      },
+      "Demande": {
+        "type": "object",
+        "description": "Les parametres tels que le service les a compris, apres normalisation.",
+        "required": [
+          "capital",
+          "taux",
+          "mois",
+          "methode",
+          "frais_dossier",
+          "frais_garantie",
+          "taux_assurance",
+          "assiette_assurance",
+          "differe_mois"
+        ],
+        "properties": {
+          "capital": {
+            "type": "string",
+            "example": "250000.000"
+          },
+          "taux": {
+            "type": "string",
+            "example": "8.500000"
+          },
+          "mois": {
+            "type": "integer",
+            "example": 240
+          },
+          "methode": {
+            "type": "string",
+            "enum": [
+              "annuite_constante",
+              "capital_constant",
+              "in_fine"
+            ]
+          },
+          "frais_dossier": {
+            "type": "string",
+            "example": "1500.000"
+          },
+          "frais_garantie": {
+            "type": "string",
+            "example": "900.000"
+          },
+          "taux_assurance": {
+            "type": "string",
+            "example": "0.360000"
+          },
+          "assiette_assurance": {
+            "type": "string",
+            "enum": [
+              "aucune",
+              "capital_initial",
+              "capital_restant_du"
+            ]
+          },
+          "tem": {
+            "type": "string",
+            "description": "Absent quand aucune verification n'est demandee.",
+            "example": "10.25"
+          },
+          "differe_mois": {
+            "type": "integer",
+            "description": "Echeances en franchise partielle.",
+            "example": 24
+          },
+          "mois_remboursement_anticipe": {
+            "type": "integer",
+            "example": 120
+          },
+          "taux_indemnite": {
+            "type": "string",
+            "example": "1.0000"
+          }
+        }
+      },
+      "Recapitulatif": {
+        "type": "object",
+        "required": [
+          "echeances",
+          "premiere_mensualite",
+          "derniere_mensualite",
+          "total_interets",
+          "total_assurance",
+          "total_frais",
+          "total_verse",
+          "cout_credit",
+          "teg",
+          "tem",
+          "seuil_excessif",
+          "conforme",
+          "marge",
+          "interets_capitalises"
+        ],
+        "properties": {
+          "echeances": {
+            "type": "integer",
+            "example": 240
+          },
+          "premiere_mensualite": {
+            "type": "number",
+            "description": "Sous annuite_constante et sans assurance sur le capital restant du, toutes les mensualites sauf la derniere valent ce montant.",
+            "example": 2169.558
+          },
+          "derniere_mensualite": {
+            "type": "number",
+            "description": "Absorbe le residu d'arrondi accumule sur les periodes precedentes.",
+            "example": 2169.614
+          },
+          "total_interets": {
+            "type": "number",
+            "example": 270693.976
+          },
+          "total_assurance": {
+            "type": "number",
+            "example": 0.0
+          },
+          "total_frais": {
+            "type": "number",
+            "description": "Somme des frais de dossier et de garantie, verses au depart.",
+            "example": 0.0
+          },
+          "total_verse": {
+            "type": "number",
+            "description": "Somme des mensualites, frais initiaux exclus.",
+            "example": 520693.976
+          },
+          "cout_credit": {
+            "type": "number",
+            "description": "Interets, assurance et frais reunis.",
+            "example": 270693.976
+          },
+          "conforme": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Faux si le TEG excede le seuil, auquel cas le pret est usuraire au sens de la loi n° 99-64. Un TEG egal au seuil reste licite.",
+            "example": true
+          },
+          "teg": {
+            "type": "number",
+            "description": "Taux effectif global en pourcent, deux decimales, selon le decret n° 2000-462. Annualisation proportionnelle du taux de periode.",
+            "example": 8.5
+          },
+          "tem": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Taux effectif moyen applique. Nul quand aucune verification n'a ete demandee.",
+            "example": 10.25
+          },
+          "seuil_excessif": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Seuil du taux excessif : le TEM majore d'un cinquieme, arrondi a deux decimales. Nul quand aucune verification n'a ete demandee.",
+            "example": 12.3
+          },
+          "marge": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Seuil moins TEG, en points de pourcentage. Negatif si le pret est excessif.",
+            "example": 3.8
+          },
+          "interets_capitalises": {
+            "type": "number",
+            "description": "Part des interets ajoutee au capital au lieu d'etre versee, sous franchise totale. Nulle autrement. La somme des parts de capital de l'echeancier vaut alors le capital emprunte plus ce montant.",
+            "example": 46148.691
+          }
+        }
+      },
+      "Echeance": {
+        "type": "object",
+        "required": [
+          "n",
+          "echeance",
+          "interets",
+          "capital",
+          "assurance",
+          "mensualite",
+          "solde",
+          "capitalise"
+        ],
+        "properties": {
+          "n": {
+            "type": "integer",
+            "minimum": 1,
+            "example": 1
+          },
+          "echeance": {
+            "type": "number",
+            "description": "Part de credit : capital + interets.",
+            "example": 2169.558
+          },
+          "interets": {
+            "type": "number",
+            "example": 1770.833
+          },
+          "capital": {
+            "type": "number",
+            "example": 398.725
+          },
+          "assurance": {
+            "type": "number",
+            "example": 0.0
+          },
+          "mensualite": {
+            "type": "number",
+            "description": "Ce que l'emprunteur verse : echeance + assurance.",
+            "example": 2169.558
+          },
+          "solde": {
+            "type": "number",
+            "description": "Capital restant du apres cette echeance. Nul apres la derniere.",
+            "example": 249601.275
+          },
+          "capitalise": {
+            "type": "number",
+            "description": "Part de l'interet du mois ajoutee au capital au lieu d'etre versee. Nulle hors franchise totale, ou elle vaut l'interet entier : echeance = interets + capital - capitalise.",
+            "example": 0
+          }
+        }
+      },
+      "Reponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "demande",
+          "recapitulatif",
+          "echeancier"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "success"
+          },
+          "demande": {
+            "$ref": "#/components/schemas/Demande"
+          },
+          "recapitulatif": {
+            "$ref": "#/components/schemas/Recapitulatif"
+          },
+          "echeancier": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Echeance"
+            }
+          },
+          "bareme": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Bareme"
+              }
+            ],
+            "description": "Present seulement quand une categorie a ete fournie."
+          },
+          "simulation_id": {
+            "type": "integer",
+            "description": "Identifiant de la ligne inscrite dans la piste d'audit. Absent quand aucune base n'est configuree.",
+            "example": 42
+          },
+          "capacite": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Capacite"
+              }
+            ],
+            "description": "Present seulement sur /v1/loans/capacity."
+          },
+          "anticipe": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Anticipe"
+              }
+            ],
+            "description": "Present seulement quand un remboursement anticipe est demande."
+          },
+          "remboursement_partiel": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Partiel"
+              }
+            ],
+            "description": "Present seulement quand un remboursement partiel a ete demande. Exclut alors anticipe."
+          }
+        }
+      },
+      "Bareme": {
+        "type": "object",
+        "description": "Taux effectif moyen applique, tel que publie par arrete.",
+        "required": [
+          "categorie",
+          "semestre",
+          "tem",
+          "arrete",
+          "publie_le"
+        ],
+        "properties": {
+          "categorie": {
+            "type": "string",
+            "example": "credits_consommation"
+          },
+          "semestre": {
+            "type": "string",
+            "description": "Semestre d'application, forme 2026S1.",
+            "example": "2026S1"
+          },
+          "tem": {
+            "type": "string",
+            "description": "Rendu en chaine : la valeur ne passe jamais par un flottant.",
+            "example": "11.23"
+          },
+          "arrete": {
+            "type": "string",
+            "example": "Arrete du 28 juillet 2026"
+          },
+          "publie_le": {
+            "type": "string",
+            "format": "date",
+            "example": "2026-07-28"
+          }
+        }
+      },
+      "Simulation": {
+        "type": "object",
+        "description": "Une ligne de la piste d'audit. La cle d'API n'y figure pas : seule une empreinte tronquee permet de distinguer les appelants.",
+        "required": [
+          "id",
+          "requete_id",
+          "demande",
+          "teg",
+          "cout_credit",
+          "premiere_mensualite",
+          "tem",
+          "seuil_excessif",
+          "conforme",
+          "cree_le"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "example": 42
+          },
+          "requete_id": {
+            "type": "string",
+            "description": "Identifiant de correlation, celui du X-Request-Id de la reponse.",
+            "example": "e8e2b43fd27683ae"
+          },
+          "empreinte_cle": {
+            "type": "string",
+            "description": "Huit caracteres du condensat de la cle. Ne permet pas de remonter au secret.",
+            "example": "8254c329"
+          },
+          "adresse": {
+            "type": "string",
+            "example": "203.0.113.7"
+          },
+          "demande": {
+            "type": "object",
+            "description": "La demande telle que le service l'a comprise."
+          },
+          "teg": {
+            "type": "string",
+            "example": "15.41"
+          },
+          "cout_credit": {
+            "type": "string",
+            "example": "38545.460"
+          },
+          "premiere_mensualite": {
+            "type": "string",
+            "example": "1434.091"
+          },
+          "tem": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "11.23"
+          },
+          "seuil_excessif": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "13.48"
+          },
+          "conforme": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "example": false
+          },
+          "categorie": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "credits_consommation"
+          },
+          "semestre": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "2026S1"
+          },
+          "arrete": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "Arrete du 28 juillet 2026"
+          },
+          "cree_le": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Capacite": {
+        "type": "object",
+        "description": "Resultat du calcul inverse. Le capital rendu est le plus grand dont la premiere mensualite tienne dans le budget, arrondis compris : un millime de plus le depasserait.",
+        "required": [
+          "capital",
+          "mensualite",
+          "marge_millimes"
+        ],
+        "properties": {
+          "capital": {
+            "type": "number",
+            "example": 230461.737
+          },
+          "mensualite": {
+            "type": "number",
+            "description": "Celle que le capital produit reellement, toujours inferieure ou egale au budget.",
+            "example": 2000.0
+          },
+          "marge_millimes": {
+            "type": "integer",
+            "description": "Part du budget non employee, en millimes.",
+            "example": 0
+          }
+        }
+      },
+      "Anticipe": {
+        "type": "object",
+        "description": "Comparaison entre solder par anticipation et poursuivre jusqu'au terme.",
+        "required": [
+          "mois",
+          "solde_restant",
+          "indemnite",
+          "total_anticipe",
+          "total_terme",
+          "economie",
+          "interets_economises"
+        ],
+        "properties": {
+          "mois": {
+            "type": "integer",
+            "example": 120
+          },
+          "solde_restant": {
+            "type": "number",
+            "description": "Capital a solder apres l'echeance de ce mois.",
+            "example": 174984.575
+          },
+          "indemnite": {
+            "type": "number",
+            "example": 1749.846
+          },
+          "total_anticipe": {
+            "type": "number",
+            "description": "Total verse en tout : echeances jusqu'a ce mois, solde et indemnite.",
+            "example": 437081.381
+          },
+          "total_terme": {
+            "type": "number",
+            "example": 520693.976
+          },
+          "economie": {
+            "type": "number",
+            "description": "Nulle si l'indemnite rend l'operation perdante ; jamais negative.",
+            "example": 83612.595
+          },
+          "interets_economises": {
+            "type": "number",
+            "example": 85362.441
+          }
+        }
+      },
+      "Partiel": {
+        "type": "object",
+        "description": "Comparaison entre rembourser une part du capital par anticipation et poursuivre le contrat jusqu'au terme. L'echeancier rendu reste celui du contrat : un remboursement anticipe est une decision de l'emprunteur, pas une clause, et le service le simule sans reecrire le tableau d'amortissement contractuel.",
+        "required": [
+          "mois",
+          "montant",
+          "indemnite",
+          "mode",
+          "duree",
+          "echeance_suivante",
+          "total",
+          "total_terme",
+          "economie",
+          "interets_economises"
+        ],
+        "properties": {
+          "mois": {
+            "type": "integer",
+            "example": 120
+          },
+          "montant": {
+            "type": "number",
+            "description": "Capital rembourse par anticipation.",
+            "example": 50000.0
+          },
+          "indemnite": {
+            "type": "number",
+            "description": "Indemnite due, calculee sur le capital rembourse et non sur le solde.",
+            "example": 500.0
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "duree_reduite",
+              "echeance_reduite"
+            ],
+            "example": "duree_reduite"
+          },
+          "duree": {
+            "type": "integer",
+            "description": "Nombre d'echeances apres l'operation : reduit en duree_reduite, inchange en echeance_reduite.",
+            "example": 195
+          },
+          "echeance_suivante": {
+            "type": "number",
+            "description": "Ce qui sera du le mois suivant l'operation, assurance comprise. Nulle quand l'operation solde le pret.",
+            "example": 2169.558
+          },
+          "total": {
+            "type": "number",
+            "description": "Total verse sur la trajectoire modifiee : echeances dues, capital rembourse et indemnite.",
+            "example": 472019.531
+          },
+          "total_terme": {
+            "type": "number",
+            "example": 520693.976
+          },
+          "economie": {
+            "type": "number",
+            "description": "Nulle si l'indemnite rend l'operation perdante ; jamais negative.",
+            "example": 48674.445
+          },
+          "interets_economises": {
+            "type": "number",
+            "example": 49174.445
+          }
+        }
+      },
+      "Agent": {
+        "type": "object",
+        "description": "Compte d'agent de credit. Le mot de passe n'y figure jamais.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "example": 1
+          },
+          "identifiant": {
+            "type": "string",
+            "example": "amine.b"
+          },
+          "nom": {
+            "type": "string",
+            "example": "Amine Ben Salah"
+          },
+          "agence": {
+            "type": "string",
+            "example": "Tunis Centre"
+          },
+          "actif": {
+            "type": "boolean",
+            "example": true
+          },
+          "cree_le": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "derniere_connexion": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "Dossier": {
+        "type": "object",
+        "description": "Dossier de pret. Aucun champ ne porte de donnee a caractere personnel : la reference renvoie au systeme de la banque, ou l'identite de l'emprunteur reste. Ce choix garde le service hors du champ des obligations de la loi n° 2004-63.",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "reference": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "Reference du dossier dans le systeme de la banque ; unique par agence.",
+            "example": "PRT-2026-0001"
+          },
+          "agent_id": {
+            "type": "integer"
+          },
+          "agence": {
+            "type": "string",
+            "example": "Tunis Centre"
+          },
+          "statut": {
+            "type": "string",
+            "enum": [
+              "brouillon",
+              "en_instruction",
+              "accorde",
+              "refuse",
+              "annule"
+            ]
+          },
+          "capital": {
+            "type": "string",
+            "example": "250000.000"
+          },
+          "taux": {
+            "type": "string",
+            "example": "8.500000"
+          },
+          "mois": {
+            "type": "integer",
+            "example": 240
+          },
+          "methode": {
+            "type": "string"
+          },
+          "differe": {
+            "type": "integer"
+          },
+          "type_differe": {
+            "type": "string",
+            "enum": [
+              "partiel",
+              "total"
+            ]
+          },
+          "categorie": {
+            "type": "string",
+            "nullable": true
+          },
+          "simulation_id": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Derniere simulation rattachee, qui porte le verdict de taux excessif."
+          },
+          "cree_le": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "maj_le": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "transitions_possibles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Suites permises depuis le statut courant."
+          }
+        }
+      },
+      "Evenement": {
+        "type": "object",
+        "description": "Changement de statut : qui a decide quoi, et quand.",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "agent_id": {
+            "type": "integer"
+          },
+          "agent_nom": {
+            "type": "string"
+          },
+          "statut_avant": {
+            "type": "string",
+            "nullable": true
+          },
+          "statut_apres": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "cree_le": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}

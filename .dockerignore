@@ -1,40 +1,27 @@
 # .dockerignore
 
-# Ignore Node.js dependencies
-**/node_modules
-npm-debug.log
-npm-debug.log.*
-
 # Version control
 .git
 .gitignore
 
-# Operating system files
-.DS_Store
-.AppleDouble
-.LSOverride
-Thumbs.db
-
-# Environment and sensitive files
-.env
-*.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# Build and compiled outputs
+# Artefacts de construction
+bin
 dist
 build
-*.log
 
-# IDE and editor files
+# Environnement et fichiers sensibles
+.env
+.env.*
+!.env.example
+
+# Fichiers systeme et editeurs
+.DS_Store
+Thumbs.db
 .vscode
 .idea
 *.swp
-*.swo
-*~
 
-# Miscellaneous
+# Journaux et temporaires
+*.log
 .tmp
 .cache
