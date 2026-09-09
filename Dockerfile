@@ -40,7 +40,9 @@ RUN go mod download
 
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
-COPY --from=cobol-builder /out/loan_amortization ./bin/loan_amortization
+# Le repertoire entier plutot que chaque binaire : un programme ajoute sans
+# ligne de copie correspondante avait deja produit une image amputee.
+COPY --from=cobol-builder /out/ ./bin/
 
 # La suite de tests tourne a la construction, invariants de l'echeancier
 # compris : une regression bloque l'image.
@@ -65,7 +67,7 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-COPY --from=cobol-builder /out/loan_amortization ./bin/loan_amortization
+COPY --from=cobol-builder /out/ ./bin/
 COPY --from=go-builder /out/cobol-api ./cobol-api
 
 # Utilisateur non privilegie. Le service n'ecrit rien sur disque.
