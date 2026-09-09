@@ -13,13 +13,20 @@
       *>
       *> Les montants sont en millimes.
       *>
-      *> Entree : une ligne de 36 caracteres sur stdin
+      *> Avec un differe, la contrainte de budget porte sur la premiere
+      *> echeance amortissante et non sur la franchise : celle-ci ne paie que
+      *> les interets, et s'y fier donnerait une capacite follement
+      *> optimiste. Le capital reste intact pendant la franchise, la
+      *> mensualite se calcule donc sur les seules echeances amortissantes.
+      *>
+      *> Entree : une ligne de 39 caracteres sur stdin
       *>            mensualite max  9(11)V999  positions  1-14
       *>            taux annuel     9(2)V9(6)  positions 15-22
       *>            duree mois      9(4)       positions 23-26
       *>            taux assurance  9(2)V9(6)  positions 27-34
-      *>            methode         X          position     35
-      *>            assiette assur. X          position     36
+      *>            differe mois    9(3)       positions 35-37
+      *>            methode         X          position     38
+      *>            assiette assur. X          position     39
       *>
       *> Sortie : un enregistrement "C" de 33 caracteres
       *>            capital         9(11)V999  positions  2-15
@@ -29,16 +36,17 @@
       *>              millimes non employes du budget
       *>
       *> Retour : 0 succes, 2 entree malformee, 3 parametres hors bornes,
-      *>          4 methode ou assiette inconnue.
+      *>          4 methode ou assiette inconnue, 5 differe incompatible
+      *>          avec la duree.
 
        ENVIRONMENT DIVISION.
 
        DATA DIVISION.
        WORKING-STORAGE SECTION.
 
-       01 WS-ENTREE             PIC X(36) VALUE SPACES.
+       01 WS-ENTREE             PIC X(39) VALUE SPACES.
        01 WS-ENTREE-CHAMPS REDEFINES WS-ENTREE.
-          05 WS-E-CHIFFRES      PIC X(34).
+          05 WS-E-CHIFFRES      PIC X(37).
           05 WS-E-METHODE       PIC X.
           05 WS-E-ASSIETTE      PIC X.
        01 WS-E-DETAIL REDEFINES WS-ENTREE.
@@ -46,6 +54,7 @@
           05 WS-E-TAUX          PIC 9(2)V9(6).
           05 WS-E-DUREE         PIC 9(4).
           05 WS-E-TAUX-ASSUR    PIC 9(2)V9(6).
+          05 WS-E-DIFFERE       PIC 9(3).
           05 FILLER             PIC X(2).
 
        78 METHODE-ANNUITE       VALUE "A".
@@ -62,6 +71,8 @@
        01 WS-TAUX-MENSUEL       PIC 9V9(18)    VALUE 0.
        01 WS-TAUX-ASSUR-MENSUEL PIC 9V9(18)    VALUE 0.
        01 WS-FACTEUR            PIC 9(9)V9(18) VALUE 0.
+      *> Echeances effectivement amortissantes, la franchise deduite.
+       01 WS-DUREE-AMORT        PIC 9(4)       VALUE 0.
 
        01 WS-BAS                PIC 9(11)V999  VALUE 0.
        01 WS-HAUT               PIC 9(11)V999  VALUE 0.
@@ -116,6 +127,15 @@
                STOP RUN
            END-IF
 
+           IF WS-E-DIFFERE >= WS-E-DUREE
+               DISPLAY "le differe doit laisser au moins une echeance "
+                   "amortissante" UPON SYSERR
+               MOVE 5 TO RETURN-CODE
+               STOP RUN
+           END-IF
+
+           COMPUTE WS-DUREE-AMORT = WS-E-DUREE - WS-E-DIFFERE
+
            IF WS-E-METHODE NOT = METHODE-ANNUITE
               AND WS-E-METHODE NOT = METHODE-CAPITAL
               AND WS-E-METHODE NOT = METHODE-IN-FINE
@@ -139,7 +159,7 @@
 
            IF WS-TAUX-MENSUEL NOT = 0
                COMPUTE WS-FACTEUR =
-                   (1 + WS-TAUX-MENSUEL) ** WS-E-DUREE
+                   (1 + WS-TAUX-MENSUEL) ** WS-DUREE-AMORT
            END-IF.
 
       *> La premiere mensualite croit avec le capital. La dichotomie retient
@@ -166,8 +186,9 @@
            COMPUTE WS-MARGE =
                (WS-E-BUDGET - WS-MENSUALITE-RETENUE) * 1000.
 
-      *> Premiere mensualite pour le capital d'essai, arrondis compris : c'est
-      *> elle qui doit tenir dans le budget, et non une valeur theorique.
+      *> Premiere mensualite amortissante pour le capital d'essai, arrondis
+      *> compris : c'est elle qui doit tenir dans le budget, et non une valeur
+      *> theorique ni celle de la franchise.
        PREMIERE-MENSUALITE.
            COMPUTE WS-INTERET ROUNDED = WS-ESSAI * WS-TAUX-MENSUEL
 
@@ -175,7 +196,7 @@
                WHEN METHODE-ANNUITE
                    IF WS-TAUX-MENSUEL = 0
                        COMPUTE WS-PART-CAPITAL ROUNDED =
-                           WS-ESSAI / WS-E-DUREE
+                           WS-ESSAI / WS-DUREE-AMORT
                    ELSE
       *> Part de capital de la premiere echeance : la mensualite
       *> constante moins les interets de la periode.
@@ -186,7 +207,7 @@
                    END-IF
                WHEN METHODE-CAPITAL
                    COMPUTE WS-PART-CAPITAL ROUNDED =
-                       WS-ESSAI / WS-E-DUREE
+                       WS-ESSAI / WS-DUREE-AMORT
                WHEN METHODE-IN-FINE
                    MOVE 0 TO WS-PART-CAPITAL
            END-EVALUATE

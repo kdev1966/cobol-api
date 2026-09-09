@@ -15,6 +15,13 @@
       *> La derniere echeance absorbe le residu d'arrondi, comme le veut
       *> la pratique bancaire.
       *>
+      *> Un differe partiel peut preceder l'amortissement : pendant la
+      *> franchise, l'emprunteur ne paie que les interets et l'assurance, le
+      *> capital reste intact. L'amortissement se fait ensuite sur la duree
+      *> restante. Les interets ne sont pas capitalises : un differe total le
+      *> ferait, et demanderait de distinguer les interets payes de ceux
+      *> ajoutes au capital.
+      *>
       *> Methodes d'amortissement :
       *>   A  annuite constante : l'echeance ne bouge pas, la part de
       *>      capital croit a mesure que les interets diminuent
@@ -37,7 +44,7 @@
       *> majorer d'un cinquieme et statuer. Un TEM nul signifie qu'aucune
       *> verification n'est demandee.
       *>
-      *> Entree : une ligne de 64 caracteres sur stdin
+      *> Entree : une ligne de 67 caracteres sur stdin
       *>            capital         9(11)V999  positions  1-14
       *>            taux annuel     9(2)V9(6)  positions 15-22
       *>            duree mois      9(4)       positions 23-26
@@ -46,8 +53,10 @@
       *>            taux assurance  9(2)V9(6)  positions 51-58
       *>            TEM categorie   9(2)V99    positions 59-62
       *>                            (zero = aucune verification)
-      *>            methode         X          position     63
-      *>            assiette assur. X          position     64
+      *>            differe mois    9(3)       positions 63-65
+      *>                            (zero = aucun differe)
+      *>            methode         X          position     66
+      *>            assiette assur. X          position     67
       *>
       *> Sortie : enregistrements a largeur fixe, un par ligne.
       *>          "R" recapitulatif : echeances 9(4), premiere et derniere
@@ -66,7 +75,8 @@
       *>          l'appelant.
       *>
       *> Retour : 0 succes, 2 entree malformee, 3 parametres hors bornes,
-      *>          4 methode ou assiette inconnue.
+      *>          4 methode ou assiette inconnue, 5 differe incompatible
+      *>          avec la duree.
       *>
       *> Le TAEG est le taux actuariel annuel qui egalise la valeur actuelle
       *> de ce que l'emprunteur verse au montant qu'il percoit reellement,
@@ -79,9 +89,9 @@
        DATA DIVISION.
        WORKING-STORAGE SECTION.
 
-       01 WS-ENTREE             PIC X(64) VALUE SPACES.
+       01 WS-ENTREE             PIC X(67) VALUE SPACES.
        01 WS-ENTREE-CHAMPS REDEFINES WS-ENTREE.
-          05 WS-E-CHIFFRES      PIC X(62).
+          05 WS-E-CHIFFRES      PIC X(65).
           05 WS-E-METHODE       PIC X.
           05 WS-E-ASSIETTE      PIC X.
        01 WS-E-DETAIL REDEFINES WS-ENTREE.
@@ -92,6 +102,7 @@
           05 WS-E-FRAIS-GARANTIE PIC 9(9)V999.
           05 WS-E-TAUX-ASSUR    PIC 9(2)V9(6).
           05 WS-E-TEM           PIC 9(2)V99.
+          05 WS-E-DIFFERE       PIC 9(3).
           05 FILLER             PIC X(2).
 
        78 METHODE-ANNUITE       VALUE "A".
@@ -113,6 +124,8 @@
        01 WS-MENSUALITE         PIC 9(11)V999  VALUE 0.
       *> Part de capital fixe de la methode a capital constant.
        01 WS-AMORT-FIXE         PIC 9(11)V999  VALUE 0.
+      *> Nombre d'echeances effectivement amortissantes, la franchise deduite.
+       01 WS-DUREE-AMORT        PIC 9(4)       VALUE 0.
        01 WS-FRAIS              PIC 9(11)V999  VALUE 0.
        01 WS-VERSE              PIC 9(11)V999  VALUE 0.
 
@@ -221,6 +234,16 @@
                STOP RUN
            END-IF
 
+      *> Il doit rester au moins une echeance pour amortir le capital.
+           IF WS-E-DIFFERE >= WS-E-DUREE
+               DISPLAY "le differe doit laisser au moins une echeance "
+                   "amortissante" UPON SYSERR
+               MOVE 5 TO RETURN-CODE
+               STOP RUN
+           END-IF
+
+           COMPUTE WS-DUREE-AMORT = WS-E-DUREE - WS-E-DIFFERE
+
            IF WS-E-METHODE NOT = METHODE-ANNUITE
               AND WS-E-METHODE NOT = METHODE-CAPITAL
               AND WS-E-METHODE NOT = METHODE-IN-FINE
@@ -260,13 +283,15 @@
 
            EVALUATE WS-E-METHODE
                WHEN METHODE-ANNUITE
+      *> La mensualite se calcule sur les seules echeances amortissantes :
+      *> le capital est intact a la sortie de la franchise.
                    IF WS-TAUX-MENSUEL = 0
       *> Sans interets la formule diviserait par zero.
                        COMPUTE WS-MENSUALITE ROUNDED =
-                           WS-E-CAPITAL / WS-E-DUREE
+                           WS-E-CAPITAL / WS-DUREE-AMORT
                    ELSE
                        COMPUTE WS-FACTEUR =
-                           (1 + WS-TAUX-MENSUEL) ** WS-E-DUREE
+                           (1 + WS-TAUX-MENSUEL) ** WS-DUREE-AMORT
                        COMPUTE WS-MENSUALITE ROUNDED =
                            WS-E-CAPITAL * WS-TAUX-MENSUEL
                            / (1 - (1 / WS-FACTEUR))
@@ -274,7 +299,7 @@
 
                WHEN METHODE-CAPITAL
                    COMPUTE WS-AMORT-FIXE ROUNDED =
-                       WS-E-CAPITAL / WS-E-DUREE
+                       WS-E-CAPITAL / WS-DUREE-AMORT
 
                WHEN METHODE-IN-FINE
       *> Aucun capital n'est rembourse avant la derniere echeance.
@@ -305,6 +330,11 @@
                            WS-SOLDE * WS-TAUX-ASSUR-MENSUEL
                END-EVALUATE
 
+               IF WS-I <= WS-E-DIFFERE
+      *> Pendant la franchise, seuls les interets et l'assurance sont
+      *> dus : le capital reste intact.
+                   MOVE 0 TO WS-PART-CAPITAL
+               ELSE
                IF WS-I = WS-E-DUREE
       *> Quelle que soit la methode, la derniere echeance solde le
       *> capital restant : c'est elle qui absorbe le residu accumule
@@ -320,6 +350,7 @@
                        WHEN METHODE-IN-FINE
                            MOVE 0 TO WS-PART-CAPITAL
                    END-EVALUATE
+               END-IF
                END-IF
 
                COMPUTE WS-ECHEANCE = WS-PART-CAPITAL + WS-INTERET

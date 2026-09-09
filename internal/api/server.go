@@ -142,7 +142,7 @@ func (s *Serveur) index(w http.ResponseWriter, r *http.Request) {
 		"endpoints": []map[string]any{
 			{
 				"method":              "GET",
-				"path":                "/v1/loans/schedule?capital=&taux=&mois=&methode=&frais_dossier=&frais_garantie=&taux_assurance=&assiette_assurance=&categorie=",
+				"path":                "/v1/loans/schedule?capital=&taux=&mois=&methode=&frais_dossier=&frais_garantie=&taux_assurance=&assiette_assurance=&differe=&categorie=",
 				"auth":                true,
 				"description":         "Echeancier de pret",
 				"methodes":            loan.MethodesAcceptees(),
@@ -307,6 +307,7 @@ func (s *Serveur) capacite(w http.ResponseWriter, r *http.Request) {
 		Methode:       q.Get("methode"),
 		TauxAssurance: q.Get("taux_assurance"),
 		Assiette:      q.Get("assiette_assurance"),
+		Differe:       q.Get("differe"),
 	}
 	budget, err := loan.ParseDemandeCapacite(params)
 	if err != nil {
@@ -328,6 +329,7 @@ func (s *Serveur) capacite(w http.ResponseWriter, r *http.Request) {
 	// Le capital trouve est ensuite deroule : le calcul inverse ne dispense
 	// pas de produire l'echeancier, ni d'en juger le taux.
 	params.Capital = capacite.Capital.String()
+	params.Differe = q.Get("differe")
 	params.Tem, params.Categorie = q.Get("tem"), q.Get("categorie")
 	s.produireEcheancier(w, r, params, map[string]any{"capacite": capacite})
 }
@@ -394,6 +396,7 @@ func (s *Serveur) echeancier(w http.ResponseWriter, r *http.Request) {
 		FraisGarantie: q.Get("frais_garantie"),
 		TauxAssurance: q.Get("taux_assurance"),
 		Assiette:      q.Get("assiette_assurance"),
+		Differe:       q.Get("differe"),
 		Tem:           q.Get("tem"),
 		Categorie:     q.Get("categorie"),
 	}, nil)

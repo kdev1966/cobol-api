@@ -794,6 +794,9 @@ func TestLaCapaciteEstMaximale(t *testing.T) {
 		{Mensualite: "2000.000", Taux: "8.5", Mois: "240", Methode: "capital_constant"},
 		{Mensualite: "2000.000", Taux: "8.5", Mois: "240", Methode: "in_fine"},
 		{Mensualite: "833.333", Taux: "0", Mois: "12"},
+		// Avec un differe, la contrainte porte sur la premiere echeance
+		// amortissante et non sur la franchise.
+		{Mensualite: "2000.000", Taux: "8.5", Mois: "240", Differe: "24"},
 	}
 
 	for _, p := range cas {
@@ -815,6 +818,8 @@ func TestLaCapaciteEstMaximale(t *testing.T) {
 			}
 
 			// Elle doit correspondre a l'echeancier reellement produit.
+			// Avec une franchise, c'est la premiere echeance amortissante
+			// qui doit tenir dans le budget.
 			premiere := func(capital string) int64 {
 				t.Helper()
 				p2 := p
@@ -827,7 +832,7 @@ func TestLaCapaciteEstMaximale(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Calculer(%s) : %v", capital, err)
 				}
-				return millimes(t, res.Echeancier[0].Mensualite)
+				return millimes(t, res.Echeancier[d.DiffereMois].Mensualite)
 			}
 
 			capital := millimes(t, cap.Capital)
@@ -904,5 +909,137 @@ func TestParseDemandeCapaciteValideLeBudget(t *testing.T) {
 		Mensualite: "2000.000", Taux: "8.5", Mois: "999",
 	}); err == nil {
 		t.Error("une duree hors bornes aurait du etre refusee")
+	}
+}
+
+// Pendant la franchise, seuls les interets et l'assurance sont dus : le
+// capital reste intact, et les invariants tiennent malgre tout.
+func TestDiffereDAmortissement(t *testing.T) {
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
+
+	d, err := ParseDemande(Parametres{
+		Capital: "250000.000", Taux: "8.5", Mois: "240", Differe: "24",
+	})
+	if err != nil {
+		t.Fatalf("ParseDemande : %v", err)
+	}
+	res, err := moteur.Calculer(context.Background(), d)
+	if err != nil {
+		t.Fatalf("Calculer : %v", err)
+	}
+
+	// Franchise : aucun capital amorti, solde intact.
+	for i := 0; i < 24; i++ {
+		e := res.Echeancier[i]
+		if millimes(t, e.Capital) != 0 {
+			t.Fatalf("echeance %d : capital %s amorti pendant la franchise", e.N, e.Capital)
+		}
+		if millimes(t, e.Solde) != d.CapitalMillimes {
+			t.Fatalf("echeance %d : solde %s, capital devrait rester intact", e.N, e.Solde)
+		}
+		// L'echeance se reduit aux interets.
+		if e.Echeance.String() != e.Interets.String() {
+			t.Fatalf("echeance %d : %s pour %s d'interets", e.N, e.Echeance, e.Interets)
+		}
+	}
+	// L'amortissement commence juste apres.
+	if millimes(t, res.Echeancier[24].Capital) == 0 {
+		t.Error("l'amortissement devrait commencer a la 25e echeance")
+	}
+
+	// La mensualite d'amortissement est plus elevee : meme capital, moins
+	// d'echeances pour l'amortir.
+	sans, err := ParseDemande(Parametres{Capital: "250000.000", Taux: "8.5", Mois: "240"})
+	if err != nil {
+		t.Fatalf("ParseDemande : %v", err)
+	}
+	resSans, err := moteur.Calculer(context.Background(), sans)
+	if err != nil {
+		t.Fatalf("Calculer : %v", err)
+	}
+	if millimes(t, res.Echeancier[24].Mensualite) <= millimes(t, resSans.Echeancier[0].Mensualite) {
+		t.Error("l'echeance apres franchise devrait depasser celle sans differe")
+	}
+	// Et le credit coute plus cher : on paie des interets sans rien amortir.
+	if millimes(t, res.Recapitulatif.TotalInterets) <=
+		millimes(t, resSans.Recapitulatif.TotalInterets) {
+		t.Error("un differe devrait rencherir le credit")
+	}
+}
+
+func TestLesInvariantsTiennentAvecUnDiffere(t *testing.T) {
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
+
+	cas := []Parametres{
+		{Capital: "250000.000", Taux: "8.5", Mois: "240", Differe: "24"},
+		{Capital: "120000.000", Taux: "11.23", Mois: "60", Differe: "1"},
+		// Franchise maximale : une seule echeance pour amortir.
+		{Capital: "60000.000", Taux: "13", Mois: "12", Differe: "11"},
+		{Capital: "100000.000", Taux: "0", Mois: "36", Differe: "6"},
+		{Capital: "250000.000", Taux: "8.5", Mois: "240", Differe: "24",
+			FraisDossier: "1500.000", TauxAssurance: "0.36", Assiette: "capital_restant_du"},
+	}
+
+	for _, methode := range MethodesAcceptees() {
+		for i, p := range cas {
+			p.Methode = methode
+			t.Run(fmt.Sprintf("%s/%d", methode, i), func(t *testing.T) {
+				verifierInvariants(t, moteur, p)
+			})
+		}
+	}
+}
+
+func TestParseDemandeRefuseUnDiffereAberrant(t *testing.T) {
+	cas := []struct{ nom, differe, mois string }{
+		{"egal a la duree", "12", "12"},
+		{"superieur a la duree", "13", "12"},
+		{"negatif", "-1", "12"},
+		{"non entier", "abc", "12"},
+		{"hors bornes", "600", "600"},
+	}
+	for _, c := range cas {
+		_, err := ParseDemande(Parametres{
+			Capital: "1000.000", Taux: "8.5", Mois: c.mois, Differe: c.differe,
+		})
+		if err == nil {
+			t.Errorf("differe %s : aurait du echouer", c.nom)
+			continue
+		}
+		invalide, ok := err.(*ErreurValidation)
+		if !ok || invalide.Champ != "differe" {
+			t.Errorf("differe %s : erreur %v, champ attendu differe", c.nom, err)
+		}
+	}
+}
+
+// Un differe reduit la capacite : la mensualite amortissante doit rembourser
+// le meme capital en moins d'echeances.
+func TestLeDiffereReduitLaCapacite(t *testing.T) {
+	chemin := binaireCapacite(t)
+	if chemin == "" {
+		t.Skip("binaire de capacite absent")
+	}
+	moteur := NewMoteur(binaire(t), chemin, 0)
+
+	capital := func(differe string) int64 {
+		t.Helper()
+		d, err := ParseDemandeCapacite(Parametres{
+			Mensualite: "2000.000", Taux: "8.5", Mois: "240", Differe: differe,
+		})
+		if err != nil {
+			t.Fatalf("ParseDemandeCapacite : %v", err)
+		}
+		c, err := moteur.Capaciter(context.Background(), d)
+		if err != nil {
+			t.Fatalf("Capaciter : %v", err)
+		}
+		return millimes(t, c.Capital)
+	}
+
+	sans, avec := capital(""), capital("24")
+	if avec >= sans {
+		t.Errorf("capacite avec differe %d, sans differe %d : elle devrait diminuer",
+			avec, sans)
 	}
 }

@@ -106,15 +106,15 @@ func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
 	ligne := ligneEntree(d)
 	// 14 chiffres de capital en millimes, 8 de taux, 4 de duree, 12 de frais
 	// de dossier, 12 de frais de garantie, 8 de taux d'assurance, 4 de taux
-	// effectif moyen, puis les lettres de la methode et de l'assiette. La
-	// longueur est un contrat avec le PIC X(64) du COBOL.
+	// effectif moyen, 3 de differe, puis les lettres de la methode et de
+	// l'assiette. La longueur est un contrat avec le PIC X(67) du COBOL.
 	want := "00000250000000" + "08500000" + "0240" + "000000000000" +
-		"000000000000" + "00000000" + "0000" + "AN\n"
+		"000000000000" + "00000000" + "0000" + "000" + "AN\n"
 	if ligne != want {
 		t.Errorf("ligneEntree = %q, attendu %q", ligne, want)
 	}
-	if len(ligne)-1 != 64 {
-		t.Errorf("longueur %d, attendu 64", len(ligne)-1)
+	if len(ligne)-1 != 67 {
+		t.Errorf("longueur %d, attendu 67", len(ligne)-1)
 	}
 
 	// Les frais et l'assurance doivent se retrouver a leurs positions.
@@ -136,8 +136,22 @@ func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
 	if got := l[50:58]; got != "00360000" {
 		t.Errorf("taux d'assurance a la position 51 : %q", got)
 	}
-	if got := l[62:64]; got != "AR" {
+	if got := l[65:67]; got != "AR" {
 		t.Errorf("lettres de methode et d'assiette : %q", got)
+	}
+
+	// Le differe occupe trois chiffres avant les deux lettres.
+	avecDiffere, err := ParseDemande(Parametres{
+		Capital: "250000.000", Taux: "8.5", Mois: "240", Differe: "24",
+	})
+	if err != nil {
+		t.Fatalf("ParseDemande : %v", err)
+	}
+	if got := ligneEntree(avecDiffere)[62:65]; got != "024" {
+		t.Errorf("differe a la position 63 : %q", got)
+	}
+	if got := ligne[62:65]; got != "000" {
+		t.Errorf("sans differe, le champ devrait etre nul : %q", got)
 	}
 
 	// Le plafond d'usure occupe six chiffres avant les deux lettres.
@@ -165,7 +179,7 @@ func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ParseDemande(%q) : %v", saisie, err)
 		}
-		if got := ligneEntree(d)[62]; got != lettre {
+		if got := ligneEntree(d)[65]; got != lettre {
 			t.Errorf("methode %q : lettre %q, attendu %q", saisie, got, lettre)
 		}
 	}

@@ -119,6 +119,8 @@ type Parametres struct {
 	Assiette      string
 	// Mensualite est le budget mensuel du calcul inverse.
 	Mensualite string
+	// Differe est le nombre d'echeances en franchise partielle.
+	Differe string
 	// Categorie designe la categorie de concours dont le taux effectif moyen
 	// sera lu dans le bareme.
 	Categorie string
@@ -245,6 +247,20 @@ func ParseDemande(p Parametres) (Demande, error) {
 		temAffiche = &affiche
 	}
 
+	var differe int
+	if brut := strings.TrimSpace(p.Differe); brut != "" {
+		differe, err = strconv.Atoi(brut)
+		if err != nil || differe < 0 || differe > DiffereMax {
+			return Demande{}, &ErreurValidation{"differe",
+				fmt.Sprintf("doit etre un entier entre 0 et %d", DiffereMax)}
+		}
+		// Il doit rester au moins une echeance pour amortir le capital.
+		if differe >= n {
+			return Demande{}, &ErreurValidation{"differe",
+				"doit laisser au moins une echeance amortissante"}
+		}
+	}
+
 	return Demande{
 		CapitalMillimes:       millimes,
 		TauxMillioniemes:      millioniemes,
@@ -261,6 +277,7 @@ func ParseDemande(p Parametres) (Demande, error) {
 		FraisGarantie:         formaterEchelle(fraisGarantie, DecimalesMonnaie),
 		TauxAssurance:         formaterEchelle(tauxAssurance, 6),
 		AssietteAssur:         libellesAssiette[codeAssiette],
+		DiffereMois:           differe,
 		TemCentiemes:          tem,
 		Tem:                   temAffiche,
 	}, nil

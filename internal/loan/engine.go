@@ -30,6 +30,9 @@ const (
 	TauxMax    = 99999999 // 99.999999 %, en millioniemes
 	MoisMin    = 1
 	MoisMax    = 600
+	// Le differe tient dans un PIC 9(3) et doit laisser au moins une
+	// echeance amortissante.
+	DiffereMax = 599
 	// Les frais tiennent dans un PIC 9(9)V999.
 	FraisMax = 999999999999
 )
@@ -48,6 +51,9 @@ type Demande struct {
 	FraisDossierMillimes  int64 `json:"-"`
 	FraisGarantieMillimes int64 `json:"-"`
 	TauxAssuranceMillion  int64 `json:"-"`
+	// DiffereMois est le nombre d'echeances en franchise partielle : seuls
+	// les interets et l'assurance y sont dus.
+	DiffereMois int `json:"differe_mois"`
 	// TemCentiemes porte le taux effectif moyen de la categorie de concours,
 	// 10.25 % valant 1025. Zero signifie qu'aucune verification n'est
 	// demandee.
@@ -161,15 +167,15 @@ func NewMoteur(chemin, cheminCapacite string, delai time.Duration) *Moteur {
 	return &Moteur{Chemin: chemin, CheminCapacite: cheminCapacite, Delai: delai}
 }
 
-// ligneEntree rend les 64 caracteres attendus par le programme : capital
+// ligneEntree rend les 67 caracteres attendus par le programme : capital
 // 9(11)V999, taux 9(2)V9(6), duree 9(4), frais de dossier et de garantie
-// 9(9)V999, taux d'assurance 9(2)V9(6), taux effectif moyen 9(2)V99, puis les
-// lettres de la methode et de l'assiette d'assurance.
+// 9(9)V999, taux d'assurance 9(2)V9(6), taux effectif moyen 9(2)V99, differe
+// 9(3), puis les lettres de la methode et de l'assiette d'assurance.
 func ligneEntree(d Demande) string {
-	return fmt.Sprintf("%014d%08d%04d%012d%012d%08d%04d%c%c\n",
+	return fmt.Sprintf("%014d%08d%04d%012d%012d%08d%04d%03d%c%c\n",
 		d.CapitalMillimes, d.TauxMillioniemes, d.Mois,
 		d.FraisDossierMillimes, d.FraisGarantieMillimes,
-		d.TauxAssuranceMillion, d.TemCentiemes,
+		d.TauxAssuranceMillion, d.TemCentiemes, d.DiffereMois,
 		d.CodeMethode, d.CodeAssiette)
 }
 

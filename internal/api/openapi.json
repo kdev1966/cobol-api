@@ -247,6 +247,19 @@
               ]
             },
             "example": "credits_consommation"
+          },
+          {
+            "name": "differe",
+            "in": "query",
+            "required": false,
+            "description": "Nombre d'echeances en franchise partielle : seuls les interets et l'assurance y sont dus, le capital reste intact. L'amortissement se fait ensuite sur la duree restante, d'ou une echeance plus elevee et un credit plus cher. Les interets ne sont pas capitalises. Doit laisser au moins une echeance amortissante.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 599,
+              "default": 0
+            },
+            "example": 24
           }
         ],
         "responses": {
@@ -484,7 +497,7 @@
           "credit"
         ],
         "summary": "Capacite d'emprunt",
-        "description": "Calcul inverse : a partir d'une mensualite supportable, le capital maximal empruntable. La reponse porte aussi l'echeancier complet que ce capital produit, son TEG et, si une categorie ou un TEM est fourni, le verdict de taux excessif. Comme l'echeancier, elle laisse une trace dans la piste d'audit.",
+        "description": "Calcul inverse : a partir d'une mensualite supportable, le capital maximal empruntable. La reponse porte aussi l'echeancier complet que ce capital produit, son TEG et, si une categorie ou un TEM est fourni, le verdict de taux excessif. Comme l'echeancier, elle laisse une trace dans la piste d'audit. Avec un differe, la contrainte de budget porte sur la premiere echeance amortissante et non sur la franchise, qui ne paie que les interets.",
         "operationId": "capacite",
         "parameters": [
           {
@@ -593,6 +606,19 @@
               ]
             },
             "example": "credits_consommation"
+          },
+          {
+            "name": "differe",
+            "in": "query",
+            "required": false,
+            "description": "Nombre d'echeances en franchise partielle : seuls les interets et l'assurance y sont dus, le capital reste intact. L'amortissement se fait ensuite sur la duree restante, d'ou une echeance plus elevee et un credit plus cher. Les interets ne sont pas capitalises. Doit laisser au moins une echeance amortissante.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 599,
+              "default": 0
+            },
+            "example": 24
           }
         ],
         "responses": {
@@ -725,7 +751,8 @@
           "frais_dossier",
           "frais_garantie",
           "taux_assurance",
-          "assiette_assurance"
+          "assiette_assurance",
+          "differe_mois"
         ],
         "properties": {
           "capital": {
@@ -772,6 +799,11 @@
             "type": "string",
             "description": "Absent quand aucune verification n'est demandee.",
             "example": "10.25"
+          },
+          "differe_mois": {
+            "type": "integer",
+            "description": "Echeances en franchise partielle.",
+            "example": 24
           }
         }
       },

@@ -22,6 +22,7 @@ type DemandeCapacite struct {
 	TauxAssuranceMillion int64 `json:"-"`
 	CodeMethode          byte  `json:"-"`
 	CodeAssiette         byte  `json:"-"`
+	DiffereMois          int   `json:"differe_mois"`
 
 	Mois          int    `json:"mois"`
 	Mensualite    string `json:"mensualite_max"`
@@ -43,13 +44,13 @@ type Capacite struct {
 	MargeMillimes int `json:"marge_millimes"`
 }
 
-// ligneCapacite rend les 36 caracteres attendus : mensualite 9(11)V999, taux
-// 9(2)V9(6), duree 9(4), taux d'assurance 9(2)V9(6), puis les lettres de la
-// methode et de l'assiette.
+// ligneCapacite rend les 39 caracteres attendus : mensualite 9(11)V999, taux
+// 9(2)V9(6), duree 9(4), taux d'assurance 9(2)V9(6), differe 9(3), puis les
+// lettres de la methode et de l'assiette.
 func ligneCapacite(d DemandeCapacite) string {
-	return fmt.Sprintf("%014d%08d%04d%08d%c%c\n",
+	return fmt.Sprintf("%014d%08d%04d%08d%03d%c%c\n",
 		d.BudgetMillimes, d.TauxMillioniemes, d.Mois,
-		d.TauxAssuranceMillion, d.CodeMethode, d.CodeAssiette)
+		d.TauxAssuranceMillion, d.DiffereMois, d.CodeMethode, d.CodeAssiette)
 }
 
 // Capaciter rend le capital maximal empruntable pour le budget demande.
@@ -124,6 +125,7 @@ func ParseDemandeCapacite(p Parametres) (DemandeCapacite, error) {
 	commun, err := ParseDemande(Parametres{
 		Capital: "1", Taux: p.Taux, Mois: p.Mois, Methode: p.Methode,
 		TauxAssurance: p.TauxAssurance, Assiette: p.Assiette,
+		Differe: p.Differe,
 	})
 	if err != nil {
 		return DemandeCapacite{}, err
@@ -135,6 +137,7 @@ func ParseDemandeCapacite(p Parametres) (DemandeCapacite, error) {
 		TauxAssuranceMillion: commun.TauxAssuranceMillion,
 		CodeMethode:          commun.CodeMethode,
 		CodeAssiette:         commun.CodeAssiette,
+		DiffereMois:          commun.DiffereMois,
 		Mois:                 commun.Mois,
 		Mensualite:           formaterEchelle(budget, DecimalesMonnaie),
 		Taux:                 commun.Taux,

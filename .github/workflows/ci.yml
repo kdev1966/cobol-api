@@ -238,6 +238,31 @@ jobs:
             'http://localhost:3000/v1/loans/capacity?taux=8.5&mois=240')
           test "$code" = "400"
 
+      # Pendant la franchise, seuls les interets sont dus et le capital reste
+      # intact ; le credit en devient plus cher.
+      - name: Verifier le differe d'amortissement
+        run: |
+          base='http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240'
+
+          sans=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base")
+          echo "$sans" | grep -q '"total_interets":270693.976'
+
+          avec=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base&differe=24")
+          echo "$avec" | grep -q '"total_interets":281446.923'
+          echo "$avec" | grep -q '"n":1,"echeance":1770.833,"interets":1770.833,"capital":0.000'
+          echo "$avec" | grep -q '"n":24,"echeance":1770.833'
+          echo "$avec" | grep -q '"n":25,"echeance":2263.644'
+
+          # Un differe qui ne laisse aucune echeance amortissante est refuse.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            "$base&differe=240")
+          test "$code" = "400"
+
+          # Il reduit aussi la capacite d'emprunt.
+          cap=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/capacity?mensualite=2000.000&taux=8.5&mois=240&differe=24')
+          echo "$cap" | grep -q '"capital":220882.879'
+
       - name: Verifier le bareme
         run: |
           liste=$(curl -sf -H 'X-API-Key: cle-de-ci' http://localhost:3000/v1/baremes)

@@ -104,6 +104,30 @@ Sur 250 000 DT à 8,5 % sur 240 mois :
 Chaque ligne de l'échéancier distingue `echeance` (capital + intérêts) de
 `mensualite` (échéance + assurance), ce que l'emprunteur verse réellement.
 
+## Le différé d'amortissement
+
+Une franchise peut précéder l'amortissement : pendant `differe` échéances,
+l'emprunteur ne paie que les intérêts et l'assurance, le capital reste intact.
+L'amortissement se fait ensuite sur la durée restante.
+
+Sur 250 000 DT à 8,5 % sur 240 mois avec 24 mois de différé :
+
+```
+n=  1   échéance 1770,833   intérêts 1770,833   capital 0,000     solde 250000,000
+n= 24   échéance 1770,833   intérêts 1770,833   capital 0,000     solde 250000,000
+n= 25   échéance 2263,644   intérêts 1770,833   capital 492,811   solde 249507,189
+n=240   échéance 2263,471   intérêts   15,920   capital 2247,551  solde      0,000
+```
+
+Le crédit coûte plus cher — 281 446,923 DT d'intérêts contre 270 693,976 — et
+l'échéance d'amortissement est plus élevée, le même capital devant être remboursé
+en 216 mensualités au lieu de 240. Les quatre invariants tiennent inchangés : la
+somme des parts de capital reste exactement le capital emprunté.
+
+**Les intérêts ne sont pas capitalisés.** Un différé total le ferait, et
+demanderait de distinguer sur chaque ligne les intérêts payés de ceux ajoutés au
+capital — une colonne de plus, et l'invariant 1 à reformuler. Ce n'est pas fait.
+
 ## La capacité d'emprunt
 
 Le calcul inverse : à partir d'une mensualité supportable, le capital maximal
@@ -124,6 +148,11 @@ qu'un test vérifie contre l'échéancier produit par l'autre programme.
 | in fine | 282 353,011 DT |
 
 Plus l'amortissement est lent, plus on peut emprunter à mensualité égale.
+
+Avec un différé, la contrainte porte sur la **première échéance amortissante**
+et non sur la franchise, qui ne paie que les intérêts : s'y fier donnerait une
+capacité follement optimiste. Un différé de 24 mois ramène donc la capacité de
+230 461,737 à **220 882,879 DT**.
 
 La réponse porte aussi **l'échéancier complet** que ce capital produit, son TEG
 et le verdict de taux excessif : savoir combien on peut emprunter n'a d'intérêt
@@ -434,7 +463,9 @@ privilégié et n'écrit rien sur disque.
 - Les échéances sont mensuelles. Aucune autre périodicité n'est proposée.
 - Le taux périodique est **proportionnel** (taux nominal annuel divisé par
   douze), et non le taux actuariel équivalent. C'est un choix, pas un oubli.
-- Pas d'échéances irrégulières, de différé d'amortissement ni de remboursement anticipé.
+- Pas d'échéances irrégulières ni de remboursement anticipé.
 - Le barème doit être alimenté à chaque nouvel arrêté, par migration. Aucune
   interface d'administration n'existe.
 - La piste d'audit n'a ni purge ni rétention : elle croît indéfiniment.
+- Le différé total, qui capitalise les intérêts de la franchise, n'est pas
+  implémenté. Ni le remboursement anticipé.

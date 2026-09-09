@@ -13,7 +13,7 @@ capacite="${2:?usage: fumee-cobol.sh <amortissement> <capacite>}"
 
 # 250 000,000 dinars a 8,5 % sur 240 mois, annuite constante, sans frais,
 # sans assurance et sans verification du taux excessif.
-entree="00000250000000085000000240000000000000000000000000000000000000AN"
+entree="00000250000000085000000240000000000000000000000000000000000000000AN"
 
 # Mensualite 2169,558 DT : le recapitulatif porte 0240 puis 00000002169558.
 prefixe_attendu="^R024000000002169558"
@@ -40,7 +40,7 @@ fi
 # Le calcul inverse doit retrouver un capital dont la mensualite tient dans le
 # budget : la boucle se referme sur elle-meme.
 # Budget 2169,558 DT a 8,5 % sur 240 mois, annuite constante, sans assurance.
-entree_capacite="0000000216955808500000024000000000AN"
+entree_capacite="0000000216955808500000024000000000000AN"
 attendu_capacite="^C00000250000048"
 
 sortie_capacite=$(echo "$entree_capacite" | "$capacite")
