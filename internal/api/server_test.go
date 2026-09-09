@@ -341,15 +341,25 @@ func TestSpecificationServieEtCoherente(t *testing.T) {
 		t.Error("champ openapi absent")
 	}
 
-	// Chaque chemin decrit doit repondre autre chose qu'un 404 : la
-	// specification et les routes ne peuvent pas diverger en silence.
-	for chemin := range spec.Paths {
+	// Chaque couple chemin / methode decrit doit repondre autre chose qu'un
+	// 404 : la specification et les routes ne peuvent pas diverger en
+	// silence. La methode est celle que la specification annonce, faute de
+	// quoi une route POST passerait pour absente.
+	for chemin, operations := range spec.Paths {
 		cible := chemin
 		if chemin == "/v1/loans/schedule" {
 			cible += "?capital=1000&taux=8.5&mois=12"
 		}
-		if got := appeler(h, "GET", cible, "cle-de-test").Code; got == http.StatusNotFound {
-			t.Errorf("%s est decrit dans la specification mais rend 404", chemin)
+		// Les chemins parametres sont sondes avec un identifiant quelconque :
+		// ce qui compte est que la route existe, non qu'elle trouve la ligne.
+		cible = strings.ReplaceAll(cible, "{id}", "1")
+
+		for methode := range operations {
+			verbe := strings.ToUpper(methode)
+			if got := appeler(h, verbe, cible, "cle-de-test").Code; got == http.StatusNotFound {
+				t.Errorf("%s %s est decrit dans la specification mais rend 404",
+					verbe, chemin)
+			}
 		}
 	}
 }
