@@ -67,7 +67,10 @@ type Serveur struct {
 	// audit est nil sans base : le service refuse alors les routes qui en
 	// dependent plutot que de produire des offres sans trace.
 	audit *db.Simulations
-	mux   *http.ServeMux
+	// agents est nil sans base : les comptes et les dossiers sont alors
+	// indisponibles, le moteur de calcul restant utilisable seul.
+	agents *db.Agents
+	mux    *http.ServeMux
 }
 
 // NewServeur verifie la coherence de la configuration puis monte les routes.
@@ -94,6 +97,7 @@ func NewServeur(cfg Config, base *db.Pool) (*Serveur, error) {
 	if base != nil {
 		s.baremes = db.NewBaremes(base)
 		s.audit = db.NewSimulations(base)
+		s.agents = db.NewAgents(base)
 	}
 	s.monterRoutes()
 	return s, nil
@@ -118,6 +122,17 @@ func (s *Serveur) monterRoutes() {
 	s.mux.Handle("GET /v1/loans/capacity", protege(s.capacite))
 	s.mux.Handle("GET /v1/baremes", protege(s.bareme))
 	s.mux.Handle("GET /v1/simulations", protege(s.simulations))
+
+	// L'authentification des agents est hors de la garde par cle d'API : le
+	// frontend n'en detient pas, il agit au nom d'une personne. Le plafond de
+	// requetes s'y applique en revanche, une page de connexion etant la cible
+	// naturelle d'une attaque par dictionnaire.
+	s.mux.Handle("POST /v1/auth/connexion",
+		enchainer(http.HandlerFunc(s.connexion), lim.intergiciel))
+	s.mux.Handle("POST /v1/auth/deconnexion",
+		enchainer(http.HandlerFunc(s.deconnexion), lim.intergiciel))
+	s.mux.Handle("GET /v1/auth/moi",
+		enchainer(http.HandlerFunc(s.moi), lim.intergiciel, s.gardeSession))
 	s.mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ecrireErreur(w, http.StatusNotFound, "Ressource inconnue")
 	}))

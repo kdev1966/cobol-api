@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -15,7 +16,37 @@ import (
 	"github.com/kdev1966/cobol-api/internal/db"
 )
 
+// usage decrit les sous-commandes. Sans argument, le binaire sert l'API :
+// c'est le mode attendu par le conteneur, et il reste le defaut.
+func usage() {
+	fmt.Fprint(os.Stderr, `cobol-api : moteur d'amortissement COBOL servi en Go
+
+  cobol-api                sert l'API (mode par defaut)
+  cobol-api migrer         applique les migrations puis sort
+  cobol-api creer-agent    inscrit un compte d'agent de credit
+                           -identifiant -nom -agence, mot de passe sur stdin
+
+DATABASE_URL est requise par les trois.
+`)
+}
+
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "migrer":
+			os.Exit(commandeMigrer())
+		case "creer-agent":
+			os.Exit(commandeCreerAgent(os.Args[2:]))
+		case "-h", "--help", "aide":
+			usage()
+			os.Exit(0)
+		default:
+			fmt.Fprintf(os.Stderr, "sous-commande inconnue : %s\n", os.Args[1])
+			usage()
+			os.Exit(2)
+		}
+	}
+
 	// Journaux structures : en production au format JSON, pour etre ingerables
 	// tels quels ; en texte ailleurs, pour rester lisibles au terminal.
 	cfg := api.ConfigDepuisEnv()

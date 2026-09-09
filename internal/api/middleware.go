@@ -46,8 +46,17 @@ func corsPolitique(origines []string) func(http.Handler) http.Handler {
 			if origine != "" && autorisees[origine] {
 				h := w.Header()
 				h.Set("Access-Control-Allow-Origin", origine)
-				h.Set("Access-Control-Allow-Headers", "X-API-Key")
-				h.Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+				// Le frontend est servi depuis une autre origine : il lui
+				// faut poser sa cle d'API ou son jeton de session, et
+				// declarer le type de ce qu'il envoie.
+				h.Set("Access-Control-Allow-Headers",
+					"X-API-Key, Authorization, Content-Type")
+				h.Set("Access-Control-Allow-Methods",
+					"GET, POST, PATCH, DELETE, OPTIONS")
+				// Les reponses d'erreur portent l'identifiant de correlation ;
+				// le frontend doit pouvoir le lire pour le rapporter.
+				h.Set("Access-Control-Expose-Headers", "X-Request-Id")
+				h.Set("Access-Control-Max-Age", "600")
 				h.Add("Vary", "Origin")
 			}
 			if r.Method == http.MethodOptions {
