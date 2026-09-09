@@ -67,8 +67,13 @@ jobs:
         run: go vet ./...
 
       # -race couvre le limiteur de debit, seul etat partage du service.
+      #
+      # -shuffle interdit qu'un test ne passe que parce qu'un autre l'a precede.
+      # Les tests de base de donnees ont deja dependu de cet ordre : ils ne
+      # passaient que sur une base deja migree, ce qui se voyait ici et pas en
+      # developpement, ou la base survit d'une execution a l'autre.
       - name: go test
-        run: go test -race ./...
+        run: go test -race -shuffle=on ./...
 
       # Le lecteur d'enregistrements decoupe positionnellement la sortie d'un
       # sous-processus : c'est la que le fuzzing trouve ce que les tests

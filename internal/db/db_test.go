@@ -3,10 +3,41 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
 )
+
+// TestMain applique les migrations une fois, avant tout test du paquet.
+//
+// Sans cela, l'ordre des tests deciderait de leur succes : ceux qui lisent une
+// table s'executeraient avant celui qui la cree, et ne passeraient que sur une
+// base deja migree par une execution anterieure. C'est precisement ce qui a
+// masque le probleme en developpement et l'a revele en integration continue,
+// ou la base est vierge a chaque fois.
+func TestMain(m *testing.M) {
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		// Sans base, les tests qui en ont besoin se sautent d'eux-memes.
+		os.Exit(m.Run())
+	}
+
+	ctx := context.Background()
+	pool, err := Ouvrir(ctx, url)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ouverture de la base de test :", err)
+		os.Exit(1)
+	}
+	if err := Migrer(ctx, pool); err != nil {
+		pool.Close()
+		fmt.Fprintln(os.Stderr, "migration de la base de test :", err)
+		os.Exit(1)
+	}
+	pool.Close()
+
+	os.Exit(m.Run())
+}
 
 // urlBase rend l'adresse de la base de test, ou saute le test. Les tests qui
 // ont besoin de PostgreSQL se sautent d'eux-memes en son absence ; la CI en
