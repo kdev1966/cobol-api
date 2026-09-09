@@ -78,16 +78,14 @@ func Migrer(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 	defer conn.Release()
 
-	if _, err := conn.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS schema_migrations (
-			version    text        PRIMARY KEY,
-			applique_le timestamptz NOT NULL DEFAULT now()
-		)`); err != nil {
-		return fmt.Errorf("table des migrations : %w", err)
-	}
-
 	// Le verrou est pris sur la connexion, pas sur la transaction : il couvre
 	// toute la sequence et se relache a la liberation de la connexion.
+	//
+	// Il precede la creation de la table des migrations, et non l'inverse :
+	// CREATE TABLE IF NOT EXISTS ne protege pas de la concurrence, deux
+	// instances passant ensemble le test d'existence puis echouant l'une des
+	// deux sur le catalogue. Le verrou ne porte que sur un entier, il n'a
+	// besoin d'aucune table.
 	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", verrouMigrations); err != nil {
 		return fmt.Errorf("prise du verrou : %w", err)
 	}
@@ -96,6 +94,14 @@ func Migrer(ctx context.Context, pool *pgxpool.Pool) error {
 			slog.Error("relachement du verrou de migration", "erreur", err)
 		}
 	}()
+
+	if _, err := conn.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version    text        PRIMARY KEY,
+			applique_le timestamptz NOT NULL DEFAULT now()
+		)`); err != nil {
+		return fmt.Errorf("table des migrations : %w", err)
+	}
 
 	appliquees, err := versionsAppliquees(ctx, conn)
 	if err != nil {
