@@ -575,6 +575,21 @@ printf 'un mot de passe solide\n' | cobol-api creer-agent \
   -identifiant amine.b -nom "Amine Ben Salah" -agence "Tunis Centre"
 ```
 
+Dans la pile Docker, la même commande passe par le conteneur :
+
+```sh
+printf 'un mot de passe solide\n' | docker compose exec -T cobol-api \
+  /app/cobol-api creer-agent \
+  -identifiant amine.b -nom "Amine Ben Salah" -agence "Tunis Centre"
+```
+
+**Il n'y a aucun compte par défaut.** Un service qui produit des offres de
+crédit ne se livre pas avec des identifiants connus de tous : la première
+connexion suppose qu'un administrateur ait créé un compte. Le mot de passe fait
+au moins douze caractères — le NIST SP 800-63B recommande de miser sur la
+longueur plutôt que sur des règles de composition, qui poussent surtout à des
+substitutions prévisibles.
+
 Le mot de passe passe par l'entrée standard pour ne pas rester dans
 l'historique du shell. Ouvrir une route de création publique sur un service qui
 produit des offres de crédit n'aurait pas de sens.
