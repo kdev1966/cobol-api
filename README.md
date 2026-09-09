@@ -128,6 +128,32 @@ somme des parts de capital reste exactement le capital emprunté.
 demanderait de distinguer sur chaque ligne les intérêts payés de ceux ajoutés au
 capital — une colonne de plus, et l'invariant 1 à reformuler. Ce n'est pas fait.
 
+## Le remboursement anticipé
+
+Solder le capital restant dû à une échéance donnée, moyennant une indemnité.
+La réponse compare les deux trajectoires :
+
+```json
+"anticipe": {
+  "mois": 120,
+  "solde_restant": 174984.575,
+  "indemnite": 1749.846,
+  "total_anticipe": 437081.381,
+  "total_terme": 520693.976,
+  "economie": 83612.595,
+  "interets_economises": 85362.441
+}
+```
+
+**L'indemnité n'est pas encadrée par la loi tunisienne mais par le contrat** :
+les banques pratiquent couramment 1 à 1,5 % du capital restant dû, et c'est
+négociable. Le taux est donc un paramètre, sans plafond imposé par le service.
+
+Deux propriétés vérifiées par la suite de tests : solder à la dernière échéance
+équivaut exactement à aller au terme — économie nulle, totaux identiques — et
+une indemnité assez forte peut rendre l'opération perdante, auquel cas
+l'économie est **nulle et jamais négative**.
+
 ## La capacité d'emprunt
 
 Le calcul inverse : à partir d'une mensualité supportable, le capital maximal
@@ -463,9 +489,11 @@ privilégié et n'écrit rien sur disque.
 - Les échéances sont mensuelles. Aucune autre périodicité n'est proposée.
 - Le taux périodique est **proportionnel** (taux nominal annuel divisé par
   douze), et non le taux actuariel équivalent. C'est un choix, pas un oubli.
-- Pas d'échéances irrégulières ni de remboursement anticipé.
+- Pas d'échéances irrégulières.
 - Le barème doit être alimenté à chaque nouvel arrêté, par migration. Aucune
   interface d'administration n'existe.
 - La piste d'audit n'a ni purge ni rétention : elle croît indéfiniment.
 - Le différé total, qui capitalise les intérêts de la franchise, n'est pas
-  implémenté. Ni le remboursement anticipé.
+  implémenté.
+- Le remboursement anticipé n'est que total : rembourser une partie du capital,
+  puis raccourcir la durée ou réduire l'échéance, n'est pas proposé.

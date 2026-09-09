@@ -121,6 +121,10 @@ type Parametres struct {
 	Mensualite string
 	// Differe est le nombre d'echeances en franchise partielle.
 	Differe string
+	// MoisAnticipe est l'echeance a laquelle simuler un remboursement
+	// anticipe total, et Indemnite le taux applique au capital solde.
+	MoisAnticipe string
+	Indemnite    string
 	// Categorie designe la categorie de concours dont le taux effectif moyen
 	// sera lu dans le bareme.
 	Categorie string
@@ -261,25 +265,57 @@ func ParseDemande(p Parametres) (Demande, error) {
 		}
 	}
 
+	var moisAnticipe int
+	var indemnite int64
+	var indemniteAffichee *string
+	if brut := strings.TrimSpace(p.MoisAnticipe); brut != "" {
+		moisAnticipe, err = strconv.Atoi(brut)
+		if err != nil || moisAnticipe < 1 || moisAnticipe > n {
+			return Demande{}, &ErreurValidation{"mois_remboursement_anticipe",
+				fmt.Sprintf("doit etre un entier entre 1 et %d", n)}
+		}
+
+		// L'indemnite n'est pas encadree par la loi tunisienne mais par le
+		// contrat : son taux est un parametre, sans plafond impose ici.
+		if brutIndem := strings.TrimSpace(p.Indemnite); brutIndem != "" {
+			indemnite, err = decimalVersEntier(brutIndem, 4)
+			if err != nil {
+				return Demande{}, &ErreurValidation{"indemnite", err.Error()}
+			}
+			if indemnite > 999999 {
+				return Demande{}, &ErreurValidation{"indemnite",
+					"doit etre comprise entre 0 et 99.9999"}
+			}
+		}
+		affiche := formaterEchelle(indemnite, 4)
+		indemniteAffichee = &affiche
+	} else if strings.TrimSpace(p.Indemnite) != "" {
+		return Demande{}, &ErreurValidation{"indemnite",
+			"sans objet sans mois_remboursement_anticipe"}
+	}
+
 	return Demande{
-		CapitalMillimes:       millimes,
-		TauxMillioniemes:      millioniemes,
-		CodeMethode:           code,
-		CodeAssiette:          codeAssiette,
-		FraisDossierMillimes:  fraisDossier,
-		FraisGarantieMillimes: fraisGarantie,
-		TauxAssuranceMillion:  tauxAssurance,
-		Mois:                  n,
-		Capital:               formaterEchelle(millimes, DecimalesMonnaie),
-		Taux:                  formaterEchelle(millioniemes, 6),
-		Methode:               libellesMethode[code],
-		FraisDossier:          formaterEchelle(fraisDossier, DecimalesMonnaie),
-		FraisGarantie:         formaterEchelle(fraisGarantie, DecimalesMonnaie),
-		TauxAssurance:         formaterEchelle(tauxAssurance, 6),
-		AssietteAssur:         libellesAssiette[codeAssiette],
-		DiffereMois:           differe,
-		TemCentiemes:          tem,
-		Tem:                   temAffiche,
+		CapitalMillimes:          millimes,
+		TauxMillioniemes:         millioniemes,
+		CodeMethode:              code,
+		CodeAssiette:             codeAssiette,
+		FraisDossierMillimes:     fraisDossier,
+		FraisGarantieMillimes:    fraisGarantie,
+		TauxAssuranceMillion:     tauxAssurance,
+		Mois:                     n,
+		Capital:                  formaterEchelle(millimes, DecimalesMonnaie),
+		Taux:                     formaterEchelle(millioniemes, 6),
+		Methode:                  libellesMethode[code],
+		FraisDossier:             formaterEchelle(fraisDossier, DecimalesMonnaie),
+		FraisGarantie:            formaterEchelle(fraisGarantie, DecimalesMonnaie),
+		TauxAssurance:            formaterEchelle(tauxAssurance, 6),
+		AssietteAssur:            libellesAssiette[codeAssiette],
+		DiffereMois:              differe,
+		MoisAnticipe:             moisAnticipe,
+		TauxIndemniteDixMillieme: indemnite,
+		TauxIndemnite:            indemniteAffichee,
+		TemCentiemes:             tem,
+		Tem:                      temAffiche,
 	}, nil
 }
 

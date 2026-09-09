@@ -142,7 +142,7 @@ func (s *Serveur) index(w http.ResponseWriter, r *http.Request) {
 		"endpoints": []map[string]any{
 			{
 				"method":              "GET",
-				"path":                "/v1/loans/schedule?capital=&taux=&mois=&methode=&frais_dossier=&frais_garantie=&taux_assurance=&assiette_assurance=&differe=&categorie=",
+				"path":                "/v1/loans/schedule?capital=&taux=&mois=&methode=&frais_dossier=&frais_garantie=&taux_assurance=&assiette_assurance=&differe=&mois_remboursement_anticipe=&indemnite=&categorie=",
 				"auth":                true,
 				"description":         "Echeancier de pret",
 				"methodes":            loan.MethodesAcceptees(),
@@ -397,6 +397,8 @@ func (s *Serveur) echeancier(w http.ResponseWriter, r *http.Request) {
 		TauxAssurance: q.Get("taux_assurance"),
 		Assiette:      q.Get("assiette_assurance"),
 		Differe:       q.Get("differe"),
+		MoisAnticipe:  q.Get("mois_remboursement_anticipe"),
+		Indemnite:     q.Get("indemnite"),
 		Tem:           q.Get("tem"),
 		Categorie:     q.Get("categorie"),
 	}, nil)
@@ -471,6 +473,9 @@ func (s *Serveur) produireEcheancier(w http.ResponseWriter, r *http.Request,
 		"demande":       demande,
 		"recapitulatif": resultat.Recapitulatif,
 		"echeancier":    resultat.Echeancier,
+	}
+	if resultat.Anticipe != nil {
+		corps["anticipe"] = resultat.Anticipe
 	}
 	if idSimulation != 0 {
 		corps["simulation_id"] = idSimulation

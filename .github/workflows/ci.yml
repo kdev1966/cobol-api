@@ -263,6 +263,30 @@ jobs:
             'http://localhost:3000/v1/loans/capacity?mensualite=2000.000&taux=8.5&mois=240&differe=24')
           echo "$cap" | grep -q '"capital":220882.879'
 
+      # Solder par anticipation economise les interets restants, moins
+      # l'indemnite. Solder a la derniere echeance revient au terme.
+      - name: Verifier le remboursement anticipe
+        run: |
+          base='http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240'
+
+          a=$(curl -sf -H 'X-API-Key: cle-de-ci' "$base&mois_remboursement_anticipe=120&indemnite=1")
+          echo "$a" | grep -q '"solde_restant":174984.575'
+          echo "$a" | grep -q '"indemnite":1749.846'
+          echo "$a" | grep -q '"total_terme":520693.976'
+          echo "$a" | grep -q '"economie":83612.595'
+          echo "$a" | grep -q '"interets_economises":85362.441'
+
+          # Sans demande, aucun bloc.
+          if curl -sf -H 'X-API-Key: cle-de-ci' "$base" | grep -q '"anticipe"'; then
+            echo "un bloc anticipe est rendu sans demande" >&2
+            exit 1
+          fi
+
+          # Une indemnite sans mois n'a pas d'objet.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            "$base&indemnite=1")
+          test "$code" = "400"
+
       - name: Verifier le bareme
         run: |
           liste=$(curl -sf -H 'X-API-Key: cle-de-ci' http://localhost:3000/v1/baremes)

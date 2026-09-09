@@ -22,6 +22,12 @@
       *> ferait, et demanderait de distinguer les interets payes de ceux
       *> ajoutes au capital.
       *>
+      *> Un remboursement anticipe total peut etre simule : l'emprunteur solde
+      *> le capital restant du a une echeance donnee, moyennant une indemnite.
+      *> Celle-ci n'est pas encadree par la loi tunisienne mais par le contrat,
+      *> les banques pratiquant couramment un a un et demi pour cent du capital
+      *> restant du ; son taux est donc un parametre.
+      *>
       *> Methodes d'amortissement :
       *>   A  annuite constante : l'echeance ne bouge pas, la part de
       *>      capital croit a mesure que les interets diminuent
@@ -44,7 +50,7 @@
       *> majorer d'un cinquieme et statuer. Un TEM nul signifie qu'aucune
       *> verification n'est demandee.
       *>
-      *> Entree : une ligne de 67 caracteres sur stdin
+      *> Entree : une ligne de 77 caracteres sur stdin
       *>            capital         9(11)V999  positions  1-14
       *>            taux annuel     9(2)V9(6)  positions 15-22
       *>            duree mois      9(4)       positions 23-26
@@ -55,8 +61,11 @@
       *>                            (zero = aucune verification)
       *>            differe mois    9(3)       positions 63-65
       *>                            (zero = aucun differe)
-      *>            methode         X          position     66
-      *>            assiette assur. X          position     67
+      *>            mois anticipe   9(4)       positions 66-69
+      *>                            (zero = aucun remboursement anticipe)
+      *>            taux indemnite  9(2)V9(4)  positions 70-75
+      *>            methode         X          position     76
+      *>            assiette assur. X          position     77
       *>
       *> Sortie : enregistrements a largeur fixe, un par ligne.
       *>          "R" recapitulatif : echeances 9(4), premiere et derniere
@@ -75,8 +84,8 @@
       *>          l'appelant.
       *>
       *> Retour : 0 succes, 2 entree malformee, 3 parametres hors bornes,
-      *>          4 methode ou assiette inconnue, 5 differe incompatible
-      *>          avec la duree.
+      *>          4 methode ou assiette inconnue, 5 differe ou mois de
+      *>          remboursement anticipe incompatible avec la duree.
       *>
       *> Le TAEG est le taux actuariel annuel qui egalise la valeur actuelle
       *> de ce que l'emprunteur verse au montant qu'il percoit reellement,
@@ -89,9 +98,9 @@
        DATA DIVISION.
        WORKING-STORAGE SECTION.
 
-       01 WS-ENTREE             PIC X(67) VALUE SPACES.
+       01 WS-ENTREE             PIC X(77) VALUE SPACES.
        01 WS-ENTREE-CHAMPS REDEFINES WS-ENTREE.
-          05 WS-E-CHIFFRES      PIC X(65).
+          05 WS-E-CHIFFRES      PIC X(75).
           05 WS-E-METHODE       PIC X.
           05 WS-E-ASSIETTE      PIC X.
        01 WS-E-DETAIL REDEFINES WS-ENTREE.
@@ -103,6 +112,8 @@
           05 WS-E-TAUX-ASSUR    PIC 9(2)V9(6).
           05 WS-E-TEM           PIC 9(2)V99.
           05 WS-E-DIFFERE       PIC 9(3).
+          05 WS-E-MOIS-ANTICIPE PIC 9(4).
+          05 WS-E-TAUX-INDEM    PIC 9(2)V9(4).
           05 FILLER             PIC X(2).
 
        78 METHODE-ANNUITE       VALUE "A".
@@ -140,6 +151,24 @@
        01 WS-CUM-INTERET        PIC 9(13)V999  VALUE 0.
        01 WS-CUM-ASSURANCE      PIC 9(13)V999  VALUE 0.
        01 WS-CUM-DU             PIC 9(13)V999  VALUE 0.
+      *> Total verse jusqu'a l'echeance du remboursement anticipe.
+       01 WS-CUM-DU-ANTICIPE    PIC 9(13)V999  VALUE 0.
+       01 WS-CUM-INT-ANTICIPE   PIC 9(13)V999  VALUE 0.
+       01 WS-SOLDE-ANTICIPE     PIC 9(11)V999  VALUE 0.
+       01 WS-INDEMNITE          PIC 9(11)V999  VALUE 0.
+       01 WS-TOTAL-ANTICIPE     PIC 9(13)V999  VALUE 0.
+       01 WS-ECONOMIE           PIC 9(13)V999  VALUE 0.
+       01 WS-INT-ECONOMISES     PIC 9(13)V999  VALUE 0.
+
+       01 WS-ANTICIPE.
+          05 FILLER             PIC X          VALUE "A".
+          05 WS-A-MOIS          PIC 9(4)       VALUE 0.
+          05 WS-A-SOLDE         PIC 9(11)V999  VALUE 0.
+          05 WS-A-INDEMNITE     PIC 9(11)V999  VALUE 0.
+          05 WS-A-TOTAL         PIC 9(13)V999  VALUE 0.
+          05 WS-A-TOTAL-TERME   PIC 9(13)V999  VALUE 0.
+          05 WS-A-ECONOMIE      PIC 9(13)V999  VALUE 0.
+          05 WS-A-INT-ECONOMIE  PIC 9(13)V999  VALUE 0.
        01 WS-COUT-CREDIT        PIC 9(13)V999  VALUE 0.
 
       *> Duree maximale acceptee, qui dimensionne la table des versements
@@ -204,6 +233,10 @@
            PERFORM CALCULER-TEG
            PERFORM VERIFIER-TAUX-EXCESSIF
            PERFORM ECRIRE-RECAPITULATIF
+           IF WS-E-MOIS-ANTICIPE NOT = 0
+               PERFORM CALCULER-ANTICIPE
+               PERFORM ECRIRE-ANTICIPE
+           END-IF
 
            MOVE "O" TO WS-EMETTRE
            PERFORM DEROULER-ECHEANCIER
@@ -243,6 +276,15 @@
            END-IF
 
            COMPUTE WS-DUREE-AMORT = WS-E-DUREE - WS-E-DIFFERE
+
+      *> Solder a la derniere echeance revient a aller au terme : le cas est
+      *> accepte, l'economie est alors nulle. Au-dela, il n'a pas de sens.
+           IF WS-E-MOIS-ANTICIPE > WS-E-DUREE
+               DISPLAY "le remboursement anticipe depasse la duree"
+                   UPON SYSERR
+               MOVE 5 TO RETURN-CODE
+               STOP RUN
+           END-IF
 
            IF WS-E-METHODE NOT = METHODE-ANNUITE
               AND WS-E-METHODE NOT = METHODE-CAPITAL
@@ -363,6 +405,15 @@
 
                MOVE WS-DU TO WS-VERSEMENT(WS-I)
 
+      *> Etat a l'echeance du remboursement anticipe : ce qui a ete verse
+      *> jusque-la, et ce qui reste a solder.
+               IF WS-E-MOIS-ANTICIPE NOT = 0
+                   AND WS-I = WS-E-MOIS-ANTICIPE
+                   MOVE WS-CUM-DU      TO WS-CUM-DU-ANTICIPE
+                   MOVE WS-CUM-INTERET TO WS-CUM-INT-ANTICIPE
+                   MOVE WS-SOLDE       TO WS-SOLDE-ANTICIPE
+               END-IF
+
                IF WS-I = 1
                    MOVE WS-DU TO WS-PREMIERE
                END-IF
@@ -445,6 +496,36 @@
            ELSE
                MOVE CONFORME-OUI TO WS-CONFORME
            END-IF.
+
+      *> L'emprunteur verse les echeances jusqu'au mois choisi, puis solde le
+      *> capital restant du, augmente de l'indemnite. L'economie est ce qu'il
+      *> aurait verse en allant au terme, moins ce qu'il verse ainsi.
+       CALCULER-ANTICIPE.
+           COMPUTE WS-INDEMNITE ROUNDED =
+               WS-SOLDE-ANTICIPE * WS-E-TAUX-INDEM / 100
+
+           COMPUTE WS-TOTAL-ANTICIPE =
+               WS-CUM-DU-ANTICIPE + WS-SOLDE-ANTICIPE + WS-INDEMNITE
+
+           IF WS-CUM-DU > WS-TOTAL-ANTICIPE
+               COMPUTE WS-ECONOMIE = WS-CUM-DU - WS-TOTAL-ANTICIPE
+           ELSE
+      *> Une indemnite elevee peut rendre l'operation perdante.
+               MOVE 0 TO WS-ECONOMIE
+           END-IF
+
+           COMPUTE WS-INT-ECONOMISES =
+               WS-CUM-INTERET - WS-CUM-INT-ANTICIPE.
+
+       ECRIRE-ANTICIPE.
+           MOVE WS-E-MOIS-ANTICIPE TO WS-A-MOIS
+           MOVE WS-SOLDE-ANTICIPE  TO WS-A-SOLDE
+           MOVE WS-INDEMNITE       TO WS-A-INDEMNITE
+           MOVE WS-TOTAL-ANTICIPE  TO WS-A-TOTAL
+           MOVE WS-CUM-DU          TO WS-A-TOTAL-TERME
+           MOVE WS-ECONOMIE        TO WS-A-ECONOMIE
+           MOVE WS-INT-ECONOMISES  TO WS-A-INT-ECONOMIE
+           DISPLAY WS-ANTICIPE.
 
        ECRIRE-RECAPITULATIF.
            MOVE WS-E-DUREE       TO WS-R-ECHEANCES

@@ -1,6 +1,9 @@
 package loan
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDecimalVersEntierNePasseParUnFlottant(t *testing.T) {
 	cas := []struct {
@@ -97,76 +100,72 @@ func TestParseDemandeRefuseHorsBornes(t *testing.T) {
 	}
 }
 
+// La disposition de la ligne d'entree est un contrat avec le PIC X(77) du
+// programme COBOL. Les positions sont derivees d'une table de largeurs plutot
+// que comptees a la main : ajouter un champ n'oblige alors qu'a une ligne de
+// plus, sans recalculer tous les decalages.
 func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
-	d, err := ParseDemande(Parametres{Capital: "250000.000", Taux: "8.5", Mois: "240"})
-	if err != nil {
-		t.Fatalf("ParseDemande : %v", err)
+	champs := []struct {
+		nom     string
+		largeur int
+		attendu string
+	}{
+		{"capital", 14, "00000250000000"},
+		{"taux", 8, "08500000"},
+		{"duree", 4, "0240"},
+		{"frais_dossier", 12, "000001500000"},
+		{"frais_garantie", 12, "000000900500"},
+		{"taux_assurance", 8, "00360000"},
+		{"tem", 4, "1025"},
+		{"differe", 3, "024"},
+		{"mois_anticipe", 4, "0120"},
+		{"taux_indemnite", 6, "010000"},
+		{"methode", 1, "A"},
+		{"assiette", 1, "R"},
 	}
 
-	ligne := ligneEntree(d)
-	// 14 chiffres de capital en millimes, 8 de taux, 4 de duree, 12 de frais
-	// de dossier, 12 de frais de garantie, 8 de taux d'assurance, 4 de taux
-	// effectif moyen, 3 de differe, puis les lettres de la methode et de
-	// l'assiette. La longueur est un contrat avec le PIC X(67) du COBOL.
-	want := "00000250000000" + "08500000" + "0240" + "000000000000" +
-		"000000000000" + "00000000" + "0000" + "000" + "AN\n"
-	if ligne != want {
-		t.Errorf("ligneEntree = %q, attendu %q", ligne, want)
-	}
-	if len(ligne)-1 != 67 {
-		t.Errorf("longueur %d, attendu 67", len(ligne)-1)
-	}
-
-	// Les frais et l'assurance doivent se retrouver a leurs positions.
-	avecFrais, err := ParseDemande(Parametres{
+	d, err := ParseDemande(Parametres{
 		Capital: "250000.000", Taux: "8.5", Mois: "240",
 		FraisDossier: "1500.000", FraisGarantie: "900.500",
 		TauxAssurance: "0.36", Assiette: "capital_restant_du",
+		Tem: "10.25", Differe: "24", MoisAnticipe: "120", Indemnite: "1",
 	})
 	if err != nil {
 		t.Fatalf("ParseDemande : %v", err)
-	}
-	l := ligneEntree(avecFrais)
-	if got := l[26:38]; got != "000001500000" {
-		t.Errorf("frais de dossier a la position 27 : %q", got)
-	}
-	if got := l[38:50]; got != "000000900500" {
-		t.Errorf("frais de garantie a la position 39 : %q", got)
-	}
-	if got := l[50:58]; got != "00360000" {
-		t.Errorf("taux d'assurance a la position 51 : %q", got)
-	}
-	if got := l[65:67]; got != "AR" {
-		t.Errorf("lettres de methode et d'assiette : %q", got)
 	}
 
-	// Le differe occupe trois chiffres avant les deux lettres.
-	avecDiffere, err := ParseDemande(Parametres{
-		Capital: "250000.000", Taux: "8.5", Mois: "240", Differe: "24",
-	})
-	if err != nil {
-		t.Fatalf("ParseDemande : %v", err)
+	ligne := strings.TrimSuffix(ligneEntree(d), "\n")
+
+	total := 0
+	for _, c := range champs {
+		total += c.largeur
 	}
-	if got := ligneEntree(avecDiffere)[62:65]; got != "024" {
-		t.Errorf("differe a la position 63 : %q", got)
-	}
-	if got := ligne[62:65]; got != "000" {
-		t.Errorf("sans differe, le champ devrait etre nul : %q", got)
+	if len(ligne) != total {
+		t.Fatalf("longueur %d, attendu %d", len(ligne), total)
 	}
 
-	// Le plafond d'usure occupe six chiffres avant les deux lettres.
-	avecTem, err := ParseDemande(Parametres{
-		Capital: "250000.000", Taux: "8.5", Mois: "240", Tem: "10.25",
-	})
+	position := 0
+	for _, c := range champs {
+		got := ligne[position : position+c.largeur]
+		if got != c.attendu {
+			t.Errorf("%s en position %d : %q, attendu %q",
+				c.nom, position+1, got, c.attendu)
+		}
+		position += c.largeur
+	}
+
+	// Les champs facultatifs restent a zero quand ils ne sont pas demandes,
+	// et les lettres prennent leurs valeurs par defaut.
+	nu, err := ParseDemande(Parametres{Capital: "250000.000", Taux: "8.5", Mois: "240"})
 	if err != nil {
 		t.Fatalf("ParseDemande : %v", err)
 	}
-	if got := ligneEntree(avecTem)[58:62]; got != "1025" {
-		t.Errorf("taux effectif moyen a la position 59 : %q", got)
+	ligneNue := strings.TrimSuffix(ligneEntree(nu), "\n")
+	if got := ligneNue[26 : total-2]; strings.Trim(got, "0") != "" {
+		t.Errorf("champs facultatifs non nuls : %q", got)
 	}
-	// Sans TEM, le champ reste a zero.
-	if got := ligne[58:62]; got != "0000" {
-		t.Errorf("sans TEM, le champ devrait etre nul : %q", got)
+	if got := ligneNue[total-2:]; got != "AN" {
+		t.Errorf("methode et assiette par defaut : %q, attendu \"AN\"", got)
 	}
 
 	// Chaque methode doit poser sa lettre.
@@ -175,11 +174,13 @@ func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
 		"capital_constant":  'C',
 		"in_fine":           'I',
 	} {
-		d, err := ParseDemande(Parametres{Capital: "250000.000", Taux: "8.5", Mois: "240", Methode: saisie})
+		d, err := ParseDemande(Parametres{
+			Capital: "250000.000", Taux: "8.5", Mois: "240", Methode: saisie,
+		})
 		if err != nil {
 			t.Fatalf("ParseDemande(%q) : %v", saisie, err)
 		}
-		if got := ligneEntree(d)[65]; got != lettre {
+		if got := ligneEntree(d)[total-2]; got != lettre {
 			t.Errorf("methode %q : lettre %q, attendu %q", saisie, got, lettre)
 		}
 	}

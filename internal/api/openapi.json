@@ -260,6 +260,30 @@
               "default": 0
             },
             "example": 24
+          },
+          {
+            "name": "mois_remboursement_anticipe",
+            "in": "query",
+            "required": false,
+            "description": "Echeance a laquelle simuler le solde par anticipation du capital restant du. La reponse porte alors la comparaison avec la poursuite jusqu'au terme.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600
+            },
+            "example": 120
+          },
+          {
+            "name": "indemnite",
+            "in": "query",
+            "required": false,
+            "description": "Taux d'indemnite applique au capital solde, en pourcent. L'indemnite de remboursement anticipe n'est pas encadree par la loi tunisienne mais par le contrat ; les banques pratiquent couramment 1 a 1,5 %. Sans objet sans mois_remboursement_anticipe.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,2}(\\.\\d{1,4})?$",
+              "default": "0"
+            },
+            "example": "1"
           }
         ],
         "responses": {
@@ -804,6 +828,14 @@
             "type": "integer",
             "description": "Echeances en franchise partielle.",
             "example": 24
+          },
+          "mois_remboursement_anticipe": {
+            "type": "integer",
+            "example": 120
+          },
+          "taux_indemnite": {
+            "type": "string",
+            "example": "1.0000"
           }
         }
       },
@@ -992,6 +1024,14 @@
               }
             ],
             "description": "Present seulement sur /v1/loans/capacity."
+          },
+          "anticipe": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Anticipe"
+              }
+            ],
+            "description": "Present seulement quand un remboursement anticipe est demande."
           }
         }
       },
@@ -1151,6 +1191,52 @@
             "type": "integer",
             "description": "Part du budget non employee, en millimes.",
             "example": 0
+          }
+        }
+      },
+      "Anticipe": {
+        "type": "object",
+        "description": "Comparaison entre solder par anticipation et poursuivre jusqu'au terme.",
+        "required": [
+          "mois",
+          "solde_restant",
+          "indemnite",
+          "total_anticipe",
+          "total_terme",
+          "economie",
+          "interets_economises"
+        ],
+        "properties": {
+          "mois": {
+            "type": "integer",
+            "example": 120
+          },
+          "solde_restant": {
+            "type": "number",
+            "description": "Capital a solder apres l'echeance de ce mois.",
+            "example": 174984.575
+          },
+          "indemnite": {
+            "type": "number",
+            "example": 1749.846
+          },
+          "total_anticipe": {
+            "type": "number",
+            "description": "Total verse en tout : echeances jusqu'a ce mois, solde et indemnite.",
+            "example": 437081.381
+          },
+          "total_terme": {
+            "type": "number",
+            "example": 520693.976
+          },
+          "economie": {
+            "type": "number",
+            "description": "Nulle si l'indemnite rend l'operation perdante ; jamais negative.",
+            "example": 83612.595
+          },
+          "interets_economises": {
+            "type": "number",
+            "example": 85362.441
           }
         }
       }

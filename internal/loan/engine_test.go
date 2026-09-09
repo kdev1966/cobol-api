@@ -1043,3 +1043,151 @@ func TestLeDiffereReduitLaCapacite(t *testing.T) {
 			avec, sans)
 	}
 }
+
+// Solder par anticipation economise les interets restants, moins l'indemnite.
+func TestRemboursementAnticipe(t *testing.T) {
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
+	ctx := context.Background()
+
+	calculer := func(mois, indemnite string) *Echeancier {
+		t.Helper()
+		d, err := ParseDemande(Parametres{
+			Capital: "250000.000", Taux: "8.5", Mois: "240",
+			MoisAnticipe: mois, Indemnite: indemnite,
+		})
+		if err != nil {
+			t.Fatalf("ParseDemande : %v", err)
+		}
+		res, err := moteur.Calculer(ctx, d)
+		if err != nil {
+			t.Fatalf("Calculer : %v", err)
+		}
+		return res
+	}
+
+	// Sans demande, aucun bloc de remboursement anticipe.
+	if calculer("", "").Anticipe != nil {
+		t.Error("aucun remboursement anticipe ne devrait etre rendu sans demande")
+	}
+
+	res := calculer("120", "1")
+	a := res.Anticipe
+	if a == nil {
+		t.Fatal("le remboursement anticipe devrait etre rendu")
+	}
+	if a.Mois != 120 {
+		t.Errorf("mois %d, attendu 120", a.Mois)
+	}
+	// Le solde annonce doit etre celui de l'echeancier au meme mois.
+	if a.SoldeRestant.String() != res.Echeancier[119].Solde.String() {
+		t.Errorf("solde %s, echeancier %s", a.SoldeRestant, res.Echeancier[119].Solde)
+	}
+	// L'indemnite est un pourcentage du capital solde.
+	solde, indem := millimes(t, a.SoldeRestant), millimes(t, a.Indemnite)
+	if attendu := solde / 100; indem < attendu-1 || indem > attendu+1 {
+		t.Errorf("indemnite %d, attendu environ %d (1 %% de %d)", indem, attendu, solde)
+	}
+	// Le total au terme doit etre celui du recapitulatif.
+	if a.TotalTerme.String() != res.Recapitulatif.TotalVerse.String() {
+		t.Errorf("total au terme %s, recapitulatif %s", a.TotalTerme, res.Recapitulatif.TotalVerse)
+	}
+	// L'economie est la difference entre les deux totaux.
+	if got, veut := millimes(t, a.Economie),
+		millimes(t, a.TotalTerme)-millimes(t, a.TotalAnticipe); got != veut {
+		t.Errorf("economie %d, attendu %d", got, veut)
+	}
+
+	// Une indemnite plus forte reduit l'economie.
+	sans, avec := calculer("120", "0").Anticipe, calculer("120", "1.5").Anticipe
+	if millimes(t, avec.Economie) >= millimes(t, sans.Economie) {
+		t.Error("une indemnite plus forte devrait reduire l'economie")
+	}
+	// Sans indemnite, l'economie egale les interets economises.
+	if sans.Economie.String() != sans.InteretsEconomises.String() {
+		t.Errorf("sans indemnite : economie %s, interets economises %s",
+			sans.Economie, sans.InteretsEconomises)
+	}
+	// Plus on solde tot, plus on economise.
+	if millimes(t, calculer("60", "1").Anticipe.Economie) <=
+		millimes(t, calculer("180", "1").Anticipe.Economie) {
+		t.Error("solder plus tot devrait economiser davantage")
+	}
+}
+
+// Solder a la derniere echeance revient a aller au terme.
+func TestSolderALaDerniereEcheanceEquivautAuTerme(t *testing.T) {
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
+
+	d, err := ParseDemande(Parametres{
+		Capital: "250000.000", Taux: "8.5", Mois: "240", MoisAnticipe: "240",
+	})
+	if err != nil {
+		t.Fatalf("ParseDemande : %v", err)
+	}
+	res, err := moteur.Calculer(context.Background(), d)
+	if err != nil {
+		t.Fatalf("Calculer : %v", err)
+	}
+	a := res.Anticipe
+	if a == nil {
+		t.Fatal("bloc absent")
+	}
+	if millimes(t, a.SoldeRestant) != 0 {
+		t.Errorf("solde %s, attendu nul a la derniere echeance", a.SoldeRestant)
+	}
+	if millimes(t, a.Economie) != 0 {
+		t.Errorf("economie %s, attendue nulle", a.Economie)
+	}
+	if a.TotalAnticipe.String() != a.TotalTerme.String() {
+		t.Errorf("total anticipe %s, total au terme %s", a.TotalAnticipe, a.TotalTerme)
+	}
+}
+
+// Une indemnite assez forte peut rendre l'operation perdante : l'economie est
+// alors nulle, jamais negative.
+func TestUneIndemniteExcessiveAnnuleLEconomie(t *testing.T) {
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
+
+	d, err := ParseDemande(Parametres{
+		Capital: "250000.000", Taux: "8.5", Mois: "240",
+		MoisAnticipe: "230", Indemnite: "50",
+	})
+	if err != nil {
+		t.Fatalf("ParseDemande : %v", err)
+	}
+	res, err := moteur.Calculer(context.Background(), d)
+	if err != nil {
+		t.Fatalf("Calculer : %v", err)
+	}
+	if millimes(t, res.Anticipe.Economie) != 0 {
+		t.Errorf("economie %s, attendue nulle quand l'indemnite depasse le gain",
+			res.Anticipe.Economie)
+	}
+}
+
+func TestParseDemandeValideLeRemboursementAnticipe(t *testing.T) {
+	cas := []struct{ nom, mois, indemnite, champ string }{
+		{"mois nul", "0", "", "mois_remboursement_anticipe"},
+		{"mois au-dela de la duree", "241", "", "mois_remboursement_anticipe"},
+		{"mois non entier", "abc", "", "mois_remboursement_anticipe"},
+		{"indemnite hors bornes", "120", "100", "indemnite"},
+		{"indemnite non numerique", "120", "abc", "indemnite"},
+		// Une indemnite sans mois n'a pas d'objet : mieux vaut le dire que
+		// l'ignorer en silence.
+		{"indemnite sans mois", "", "1", "indemnite"},
+	}
+	for _, c := range cas {
+		_, err := ParseDemande(Parametres{
+			Capital: "250000.000", Taux: "8.5", Mois: "240",
+			MoisAnticipe: c.mois, Indemnite: c.indemnite,
+		})
+		if err == nil {
+			t.Errorf("%s : aurait du echouer", c.nom)
+			continue
+		}
+		invalide, ok := err.(*ErreurValidation)
+		if !ok || invalide.Champ != c.champ {
+			t.Errorf("%s : erreur %v, champ attendu %q", c.nom, err, c.champ)
+		}
+	}
+}

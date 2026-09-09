@@ -51,6 +51,13 @@ type Demande struct {
 	FraisDossierMillimes  int64 `json:"-"`
 	FraisGarantieMillimes int64 `json:"-"`
 	TauxAssuranceMillion  int64 `json:"-"`
+	// MoisAnticipe est l'echeance a laquelle le capital restant est solde.
+	// Zero signifie qu'aucun remboursement anticipe n'est simule.
+	MoisAnticipe int `json:"mois_remboursement_anticipe,omitempty"`
+	// TauxIndemniteDixMillieme porte le taux d'indemnite, 1.5 % valant 15000.
+	TauxIndemniteDixMillieme int64 `json:"-"`
+	// TauxIndemnite est absent quand aucun remboursement anticipe n'est simule.
+	TauxIndemnite *string `json:"taux_indemnite,omitempty"`
 	// DiffereMois est le nombre d'echeances en franchise partielle : seuls
 	// les interets et l'assurance y sont dus.
 	DiffereMois int `json:"differe_mois"`
@@ -76,8 +83,10 @@ type Demande struct {
 const (
 	tagRecap     = 'R'
 	tagEcheance  = 'E'
+	tagAnticipe  = 'A'
 	longRecap    = 129
 	longEcheance = 89
+	longAnticipe = 97
 )
 
 // Recapitulatif est la premiere ligne rendue par le programme COBOL.
@@ -127,10 +136,27 @@ type Echeance struct {
 	Solde      json.Number `json:"solde"`
 }
 
+// Anticipe compare un remboursement anticipe total a la poursuite jusqu'au
+// terme. Il n'est present que si un remboursement anticipe a ete demande.
+type Anticipe struct {
+	Mois int `json:"mois"`
+	// SoldeRestant est le capital a solder apres l'echeance de ce mois.
+	SoldeRestant json.Number `json:"solde_restant"`
+	Indemnite    json.Number `json:"indemnite"`
+	// TotalAnticipe est ce que l'emprunteur aura verse en tout : les
+	// echeances jusqu'a ce mois, le solde et l'indemnite.
+	TotalAnticipe json.Number `json:"total_anticipe"`
+	TotalTerme    json.Number `json:"total_terme"`
+	// Economie est nulle si l'indemnite rend l'operation perdante.
+	Economie           json.Number `json:"economie"`
+	InteretsEconomises json.Number `json:"interets_economises"`
+}
+
 // Echeancier est le resultat complet d'un calcul.
 type Echeancier struct {
 	Recapitulatif Recapitulatif `json:"recapitulatif"`
 	Echeancier    []Echeance    `json:"echeancier"`
+	Anticipe      *Anticipe     `json:"anticipe,omitempty"`
 }
 
 // ErrProgramme signale un echec du programme COBOL lui-meme.
@@ -167,15 +193,17 @@ func NewMoteur(chemin, cheminCapacite string, delai time.Duration) *Moteur {
 	return &Moteur{Chemin: chemin, CheminCapacite: cheminCapacite, Delai: delai}
 }
 
-// ligneEntree rend les 67 caracteres attendus par le programme : capital
+// ligneEntree rend les 77 caracteres attendus par le programme : capital
 // 9(11)V999, taux 9(2)V9(6), duree 9(4), frais de dossier et de garantie
 // 9(9)V999, taux d'assurance 9(2)V9(6), taux effectif moyen 9(2)V99, differe
-// 9(3), puis les lettres de la methode et de l'assiette d'assurance.
+// 9(3), mois du remboursement anticipe 9(4), taux d'indemnite 9(2)V9(4), puis
+// les lettres de la methode et de l'assiette d'assurance.
 func ligneEntree(d Demande) string {
-	return fmt.Sprintf("%014d%08d%04d%012d%012d%08d%04d%03d%c%c\n",
+	return fmt.Sprintf("%014d%08d%04d%012d%012d%08d%04d%03d%04d%06d%c%c\n",
 		d.CapitalMillimes, d.TauxMillioniemes, d.Mois,
 		d.FraisDossierMillimes, d.FraisGarantieMillimes,
 		d.TauxAssuranceMillion, d.TemCentiemes, d.DiffereMois,
+		d.MoisAnticipe, d.TauxIndemniteDixMillieme,
 		d.CodeMethode, d.CodeAssiette)
 }
 
@@ -271,6 +299,13 @@ func lireSortie(r *bytes.Buffer) (*Echeancier, error) {
 				return nil, err
 			}
 			res.Echeancier = append(res.Echeancier, e)
+
+		case len(ligne) == longAnticipe && ligne[0] == tagAnticipe:
+			var a Anticipe
+			if err := lireAnticipe(ligne, &a); err != nil {
+				return nil, err
+			}
+			res.Anticipe = &a
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -367,6 +402,32 @@ func nombreSigne(champ string, decimales int) (json.Number, error) {
 	default:
 		return "", fmt.Errorf("signe %q inattendu", champ[0])
 	}
+}
+
+func lireAnticipe(ligne string, a *Anticipe) error {
+	var err error
+	if a.Mois, err = entier(ligne[1:5]); err != nil {
+		return fmt.Errorf("remboursement anticipe illisible : %w", err)
+	}
+
+	champs := []struct {
+		cible *json.Number
+		debut int
+		fin   int
+	}{
+		{&a.SoldeRestant, 5, 19},
+		{&a.Indemnite, 19, 33},
+		{&a.TotalAnticipe, 33, 49},
+		{&a.TotalTerme, 49, 65},
+		{&a.Economie, 65, 81},
+		{&a.InteretsEconomises, 81, 97},
+	}
+	for _, c := range champs {
+		if *c.cible, err = montant(ligne[c.debut:c.fin]); err != nil {
+			return fmt.Errorf("remboursement anticipe illisible : %w", err)
+		}
+	}
+	return nil
 }
 
 func lireEcheance(ligne string, e *Echeance) error {
