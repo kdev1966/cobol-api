@@ -50,7 +50,7 @@
       *> majorer d'un cinquieme et statuer. Un TEM nul signifie qu'aucune
       *> verification n'est demandee.
       *>
-      *> Entree : une ligne de 92 caracteres sur stdin
+      *> Entree : une ligne de 93 caracteres sur stdin
       *>            capital         9(11)V999  positions  1-14
       *>            taux annuel     9(2)V9(6)  positions 15-22
       *>            duree mois      9(4)       positions 23-26
@@ -71,6 +71,11 @@
       *>            mode anticipe   X          position     92
       *>                            (T total, D duree reduite,
       *>                             M echeance reduite)
+      *>            type differe    X          position     93
+      *>                            (P partiel : les interets sont dus
+      *>                             chaque mois, le capital reste intact ;
+      *>                             T total : rien n'est du, les interets
+      *>                             grossissent le capital)
       *>
       *> Sortie : enregistrements a largeur fixe, un par ligne.
       *>          "R" recapitulatif : echeances 9(4), premiere et derniere
@@ -78,9 +83,10 @@
       *>              9(13)V999, total frais 9(11)V999, total du et cout du
       *>              credit 9(13)V999, taeg 9(2)V9(4), taux d'usure
       *>              9(2)V9(4), conformite X, marge S9(2)V9(4) a signe
-      *>              separe                                  -> 129 car.
+      *>              separe, interets capitalises 9(13)V999  -> 145 car.
       *>          "E" echeance      : numero 9(4), echeance, interets,
-      *>              capital, assurance, du, solde 9(11)V999  -> 89 car.
+      *>              capital, assurance, du, solde, part capitalisee
+      *>              9(11)V999                               -> 103 car.
       *>          "A" solde total   : mois 9(4), solde restant, indemnite
       *>              9(11)V999, total anticipe, total au terme, economie,
       *>              interets economises 9(13)V999            -> 97 car.
@@ -116,12 +122,13 @@
        DATA DIVISION.
        WORKING-STORAGE SECTION.
 
-       01 WS-ENTREE             PIC X(92) VALUE SPACES.
+       01 WS-ENTREE             PIC X(93) VALUE SPACES.
        01 WS-ENTREE-CHAMPS REDEFINES WS-ENTREE.
           05 WS-E-CHIFFRES      PIC X(89).
           05 WS-E-METHODE       PIC X.
           05 WS-E-ASSIETTE      PIC X.
           05 WS-E-MODE-ANTIC    PIC X.
+          05 WS-E-TYPE-DIFFERE  PIC X.
        01 WS-E-DETAIL REDEFINES WS-ENTREE.
           05 WS-E-CAPITAL       PIC 9(11)V999.
           05 WS-E-TAUX          PIC 9(2)V9(6).
@@ -136,7 +143,7 @@
       *> Capital rembourse par anticipation en cours de pret, nul quand
       *> l'operation est un solde total.
           05 WS-E-MONTANT-ANTIC PIC 9(11)V999.
-          05 FILLER             PIC X(3).
+          05 FILLER             PIC X(4).
 
        78 METHODE-ANNUITE       VALUE "A".
        78 METHODE-CAPITAL       VALUE "C".
@@ -153,6 +160,11 @@
        78 MODE-TOTAL            VALUE "T".
        78 MODE-DUREE            VALUE "D".
        78 MODE-MENSUALITE       VALUE "M".
+      *> Nature de la franchise : partielle, ou les interets sont dus chaque
+      *> mois et le capital reste intact ; totale, ou rien n'est du et les
+      *> interets viennent grossir le capital.
+       78 DIFFERE-PARTIEL       VALUE "P".
+       78 DIFFERE-TOTAL         VALUE "T".
 
        01 WS-CONFORME           PIC X      VALUE "-".
        01 WS-MARGE              PIC S9(2)V99   VALUE 0.
@@ -230,6 +242,13 @@
           05 WS-P-ECONOMIE      PIC 9(13)V999  VALUE 0.
           05 WS-P-INT-ECONOMIE  PIC 9(13)V999  VALUE 0.
 
+      *> Capital sur lequel porte l'amortissement : le capital emprunte, ou
+      *> celui-ci grossi des interets de la franchise totale.
+       01 WS-CAPITAL-AMORTI     PIC 9(11)V999  VALUE 0.
+       01 WS-INT-CAPITALISES    PIC 9(13)V999  VALUE 0.
+      *> Interet du mois ajoute au capital au lieu d'etre verse.
+       01 WS-CAPITALISE         PIC 9(11)V999  VALUE 0.
+
        01 WS-COUT-CREDIT        PIC 9(13)V999  VALUE 0.
 
       *> Duree maximale acceptee, qui dimensionne la table des versements
@@ -272,6 +291,7 @@
           05 WS-R-SEUIL         PIC 9(2)V99    VALUE 0.
           05 WS-R-CONFORME      PIC X          VALUE "-".
           05 WS-R-MARGE         PIC S9(2)V99 SIGN IS LEADING SEPARATE.
+          05 WS-R-CAPITALISES   PIC 9(13)V999  VALUE 0.
 
        01 WS-LIGNE.
           05 FILLER             PIC X          VALUE "E".
@@ -282,6 +302,9 @@
           05 WS-L-ASSURANCE     PIC 9(11)V999  VALUE 0.
           05 WS-L-DU            PIC 9(11)V999  VALUE 0.
           05 WS-L-SOLDE         PIC 9(11)V999  VALUE 0.
+      *> Part de l'interet du mois ajoutee au capital au lieu d'etre versee.
+      *> Nulle hors franchise totale.
+          05 WS-L-CAPITALISE    PIC 9(11)V999  VALUE 0.
 
        PROCEDURE DIVISION.
 
@@ -351,6 +374,21 @@
                DISPLAY "le remboursement anticipe depasse la duree"
                    UPON SYSERR
                MOVE 5 TO RETURN-CODE
+               STOP RUN
+           END-IF
+
+           IF WS-E-TYPE-DIFFERE NOT = DIFFERE-PARTIEL
+              AND WS-E-TYPE-DIFFERE NOT = DIFFERE-TOTAL
+               DISPLAY "type de differe inconnu : " WS-E-TYPE-DIFFERE
+                   UPON SYSERR
+               MOVE 6 TO RETURN-CODE
+               STOP RUN
+           END-IF
+
+           IF WS-E-TYPE-DIFFERE = DIFFERE-TOTAL AND WS-E-DIFFERE = 0
+               DISPLAY "un differe total exige une franchise non nulle"
+                   UPON SYSERR
+               MOVE 6 TO RETURN-CODE
                STOP RUN
            END-IF
 
@@ -438,6 +476,8 @@
            COMPUTE WS-TAUX-MENSUEL = WS-E-TAUX / 100 / 12
            COMPUTE WS-TAUX-ASSUR-MENSUEL = WS-E-TAUX-ASSUR / 100 / 12
 
+           PERFORM CAPITALISER-LA-FRANCHISE
+
            EVALUATE WS-E-METHODE
                WHEN METHODE-ANNUITE
       *> La mensualite se calcule sur les seules echeances amortissantes :
@@ -445,18 +485,18 @@
                    IF WS-TAUX-MENSUEL = 0
       *> Sans interets la formule diviserait par zero.
                        COMPUTE WS-MENSUALITE ROUNDED =
-                           WS-E-CAPITAL / WS-DUREE-AMORT
+                           WS-CAPITAL-AMORTI / WS-DUREE-AMORT
                    ELSE
                        COMPUTE WS-FACTEUR =
                            (1 + WS-TAUX-MENSUEL) ** WS-DUREE-AMORT
                        COMPUTE WS-MENSUALITE ROUNDED =
-                           WS-E-CAPITAL * WS-TAUX-MENSUEL
+                           WS-CAPITAL-AMORTI * WS-TAUX-MENSUEL
                            / (1 - (1 / WS-FACTEUR))
                    END-IF
 
                WHEN METHODE-CAPITAL
                    COMPUTE WS-AMORT-FIXE ROUNDED =
-                       WS-E-CAPITAL / WS-DUREE-AMORT
+                       WS-CAPITAL-AMORTI / WS-DUREE-AMORT
 
                WHEN METHODE-IN-FINE
       *> Aucun capital n'est rembourse avant la derniere echeance.
@@ -467,6 +507,28 @@
       *> de deroulement : chaque passe repart de celles du contrat.
            MOVE WS-MENSUALITE TO WS-MENSUALITE-INIT
            MOVE WS-AMORT-FIXE TO WS-AMORT-FIXE-INIT.
+
+      *> Sous franchise totale, rien n'est verse pendant le differe : chaque
+      *> interet mensuel vient grossir le capital, et c'est ce capital grossi
+      *> qui est ensuite amorti. Les interets se capitalisent donc, ce que le
+      *> differe partiel evite.
+      *>
+      *> La franchise est parcourue ici, mois par mois avec le meme arrondi
+      *> qu'a l'echeancier, plutot que resolue par une puissance : le capital
+      *> amorti doit valoir exactement celui que la boucle retrouvera.
+       CAPITALISER-LA-FRANCHISE.
+           MOVE WS-E-CAPITAL TO WS-CAPITAL-AMORTI
+           MOVE 0 TO WS-INT-CAPITALISES
+
+           IF WS-E-TYPE-DIFFERE = DIFFERE-TOTAL
+               PERFORM VARYING WS-I FROM 1 BY 1
+                   UNTIL WS-I > WS-E-DIFFERE
+                   COMPUTE WS-INTERET ROUNDED =
+                       WS-CAPITAL-AMORTI * WS-TAUX-MENSUEL
+                   ADD WS-INTERET TO WS-CAPITAL-AMORTI
+                   ADD WS-INTERET TO WS-INT-CAPITALISES
+               END-PERFORM
+           END-IF.
 
        DEROULER-ECHEANCIER.
            MOVE WS-E-CAPITAL TO WS-SOLDE
@@ -496,10 +558,16 @@
                            WS-SOLDE * WS-TAUX-ASSUR-MENSUEL
                END-EVALUATE
 
+               MOVE 0 TO WS-CAPITALISE
+
                IF WS-I <= WS-E-DIFFERE
-      *> Pendant la franchise, seuls les interets et l'assurance sont
-      *> dus : le capital reste intact.
+      *> Pendant la franchise, le capital n'est pas amorti. Reste a savoir
+      *> ce qu'il advient de l'interet : verse chaque mois sous franchise
+      *> partielle, ajoute au capital sous franchise totale.
                    MOVE 0 TO WS-PART-CAPITAL
+                   IF WS-E-TYPE-DIFFERE = DIFFERE-TOTAL
+                       MOVE WS-INTERET TO WS-CAPITALISE
+                   END-IF
                ELSE
                IF WS-I = WS-DUREE-EFFECTIVE
       *> Quelle que soit la methode, la derniere echeance solde le
@@ -528,10 +596,14 @@
                END-IF
                END-IF
 
-               COMPUTE WS-ECHEANCE = WS-PART-CAPITAL + WS-INTERET
+      *> L'interet capitalise n'est pas verse : il est retranche de
+      *> l'echeance et ajoute au capital restant du.
+               COMPUTE WS-ECHEANCE =
+                   WS-PART-CAPITAL + WS-INTERET - WS-CAPITALISE
                COMPUTE WS-DU = WS-ECHEANCE + WS-ASSURANCE
 
                SUBTRACT WS-PART-CAPITAL FROM WS-SOLDE
+               ADD WS-CAPITALISE TO WS-SOLDE
                ADD WS-INTERET    TO WS-CUM-INTERET
                ADD WS-ASSURANCE  TO WS-CUM-ASSURANCE
                ADD WS-DU         TO WS-CUM-DU
@@ -782,6 +854,7 @@
            MOVE WS-SEUIL         TO WS-R-SEUIL
            MOVE WS-CONFORME      TO WS-R-CONFORME
            MOVE WS-MARGE         TO WS-R-MARGE
+           MOVE WS-INT-CAPITALISES TO WS-R-CAPITALISES
 
            DISPLAY WS-RECAP.
 
@@ -793,5 +866,6 @@
            MOVE WS-ASSURANCE    TO WS-L-ASSURANCE
            MOVE WS-DU           TO WS-L-DU
            MOVE WS-SOLDE        TO WS-L-SOLDE
+           MOVE WS-CAPITALISE   TO WS-L-CAPITALISE
 
            DISPLAY WS-LIGNE.

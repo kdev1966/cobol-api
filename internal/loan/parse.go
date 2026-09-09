@@ -131,6 +131,29 @@ func ModesAcceptes() []string {
 	return []string{"total", "duree_reduite", "echeance_reduite"}
 }
 
+// TypeDiffereParDefaut : une franchise ou seul le capital est suspendu. Les
+// interets restent dus chaque mois, donc ne se capitalisent pas.
+const TypeDiffereParDefaut = "partiel"
+
+// codesTypeDiffere associe chaque nature de franchise a la lettre attendue
+// par le programme COBOL.
+var codesTypeDiffere = map[string]byte{
+	"partiel": 'P',
+	"total":   'T',
+	"P":       'P',
+	"T":       'T',
+}
+
+var libellesTypeDiffere = map[byte]string{
+	'P': "partiel",
+	'T': "total",
+}
+
+// TypesDiffereAcceptes liste les libelles canoniques.
+func TypesDiffereAcceptes() []string {
+	return []string{"partiel", "total"}
+}
+
 // ParseDemande valide les parametres et rend une demande prete a calculer.
 // Les bornes protegent a la fois les PIC du programme COBOL et la taille de
 // la reponse.
@@ -146,8 +169,11 @@ type Parametres struct {
 	Assiette      string
 	// Mensualite est le budget mensuel du calcul inverse.
 	Mensualite string
-	// Differe est le nombre d'echeances en franchise partielle.
-	Differe string
+	// Differe est le nombre d'echeances en franchise, et TypeDiffere la
+	// nature de celle-ci : partielle, ou les interets restent dus, ou totale,
+	// ou rien n'est verse et les interets grossissent le capital.
+	Differe     string
+	TypeDiffere string
 	// MoisAnticipe est l'echeance a laquelle simuler un remboursement
 	// anticipe, et Indemnite le taux applique au capital rembourse.
 	MoisAnticipe string
@@ -297,6 +323,27 @@ func ParseDemande(p Parametres) (Demande, error) {
 		}
 	}
 
+	typeDiffere := strings.TrimSpace(p.TypeDiffere)
+	codeTypeDiffere := byte('P')
+	var typeDiffereAffiche *string
+	if typeDiffere != "" {
+		var connu bool
+		codeTypeDiffere, connu = codesTypeDiffere[typeDiffere]
+		if !connu {
+			return Demande{}, &ErreurValidation{"type_differe",
+				"doit valoir " + strings.Join(TypesDiffereAcceptes(), ", ")}
+		}
+		// Qualifier une franchise qui n'existe pas est une erreur de saisie.
+		if differe == 0 {
+			return Demande{}, &ErreurValidation{"type_differe",
+				"sans objet sans differe"}
+		}
+	}
+	if differe > 0 {
+		l := libellesTypeDiffere[codeTypeDiffere]
+		typeDiffereAffiche = &l
+	}
+
 	// Le mode se lit meme sans remboursement anticipe : le preciser seul est
 	// une erreur de saisie qu'il vaut mieux signaler que taire.
 	mode := strings.TrimSpace(p.Mode)
@@ -407,6 +454,8 @@ func ParseDemande(p Parametres) (Demande, error) {
 		TauxAssurance:            formaterEchelle(tauxAssurance, 6),
 		AssietteAssur:            libellesAssiette[codeAssiette],
 		DiffereMois:              differe,
+		CodeTypeDiffere:          codeTypeDiffere,
+		TypeDiffere:              typeDiffereAffiche,
 		MoisAnticipe:             moisAnticipe,
 		TauxIndemniteDixMillieme: indemnite,
 		TauxIndemnite:            indemniteAffichee,

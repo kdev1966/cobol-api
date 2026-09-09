@@ -51,15 +51,16 @@ func binaire(t *testing.T) string {
 // assurance, ni frais, ni verification du taux excessif : les tests de lecture
 // portent sur le decoupage, pas sur le calcul. Les montants sont en millimes.
 func recap(echeances int, premiere, derniere, interets, total string) string {
-	return fmt.Sprintf("R%04d%014s%014s%016s%016s%014s%016s%016s%04d%04d%04d%s%s",
+	return fmt.Sprintf("R%04d%014s%014s%016s%016s%014s%016s%016s%04d%04d%04d%s%s%016s",
 		echeances, premiere, derniere, interets,
 		"0000000000000000", "00000000000000", total, interets,
-		850, 0, 0, "-", "+0000")
+		850, 0, 0, "-", "+0000", "0000000000000000")
 }
 
 func echeance(n int, mensualite, interets, capital, solde string) string {
-	return fmt.Sprintf("E%04d%014s%014s%014s%014s%014s%014s",
-		n, mensualite, interets, capital, "00000000000000", mensualite, solde)
+	return fmt.Sprintf("E%04d%014s%014s%014s%014s%014s%014s%014s",
+		n, mensualite, interets, capital, "00000000000000", mensualite, solde,
+		"00000000000000")
 }
 
 func TestLireSortieEcarteLesLignesParasites(t *testing.T) {
@@ -228,15 +229,20 @@ func verifierInvariants(t *testing.T, moteur *Moteur, p Parametres) {
 	}
 
 	var sommeCapital, sommeInterets, sommeEcheances int64
-	var sommeAssurance, sommeMensualites int64
+	var sommeAssurance, sommeMensualites, sommeCapitalise int64
 	for _, e := range res.Echeancier {
 		p := millimes(t, e.Echeance)
 		i := millimes(t, e.Interets)
 		k := millimes(t, e.Capital)
+		c := millimes(t, e.Capitalise)
 
-		// Invariant 4 : la part de credit s'equilibre.
-		if p != i+k {
-			t.Errorf("echeance %d : echeance %d != interets %d + capital %d", e.N, p, i, k)
+		// Invariant 4 : la part de credit s'equilibre. L'interet capitalise
+		// n'est pas verse : il s'ajoute au capital au lieu d'entrer dans
+		// l'echeance. Sous franchise partielle il est toujours nul, et
+		// l'invariant retrouve sa forme simple.
+		if p != i+k-c {
+			t.Errorf("echeance %d : echeance %d != interets %d + capital %d "+
+				"- capitalise %d", e.N, p, i, k, c)
 		}
 		// Invariant 5 : la mensualite est l'echeance plus l'assurance.
 		a := millimes(t, e.Assurance)
@@ -248,13 +254,21 @@ func verifierInvariants(t *testing.T, moteur *Moteur, p Parametres) {
 		sommeInterets += i
 		sommeEcheances += p
 		sommeAssurance += a
+		sommeCapitalise += c
 		sommeMensualites += millimes(t, e.Mensualite)
 	}
 
-	// Invariant 1 : la somme des parts de capital egale le capital emprunte.
-	if sommeCapital != d.CapitalMillimes {
-		t.Errorf("somme des parts de capital %d, capital emprunte %d",
-			sommeCapital, d.CapitalMillimes)
+	// Invariant 1 : la somme des parts de capital egale le capital emprunte,
+	// grossi des interets que la franchise totale y a ajoutes. Sans franchise
+	// totale la capitalisation est nulle et l'egalite reste la plus simple.
+	if sommeCapital != d.CapitalMillimes+sommeCapitalise {
+		t.Errorf("somme des parts de capital %d, capital emprunte %d "+
+			"plus capitalise %d", sommeCapital, d.CapitalMillimes,
+			sommeCapitalise)
+	}
+	// Le recapitulatif doit rendre la meme capitalisation que le detail.
+	if got := millimes(t, res.Recapitulatif.InteretsCapitalises); got != sommeCapitalise {
+		t.Errorf("interets_capitalises %d, detail %d", got, sommeCapitalise)
 	}
 	// Invariant 2 : les echeances valent le capital plus les interets.
 	if sommeEcheances != d.CapitalMillimes+sommeInterets {
@@ -1494,5 +1508,134 @@ func TestSeulLeCodeDeRefusDonneUneErreurDeSaisie(t *testing.T) {
 		} else if !errors.Is(err, ErrProgramme) {
 			t.Errorf("code %d : erreur %v, attendu ErrProgramme", c.code, err)
 		}
+	}
+}
+
+// Sous franchise totale, rien n'est verse pendant le differe et les interets
+// grossissent le capital. C'est la difference avec la franchise partielle, ou
+// les interets sont dus chaque mois et le capital reste intact.
+func TestDiffereTotal(t *testing.T) {
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
+	ctx := context.Background()
+
+	calculer := func(typeDiffere string) *Echeancier {
+		t.Helper()
+		d, err := ParseDemande(Parametres{
+			Capital: "250000.000", Taux: "8.5", Mois: "240",
+			Differe: "24", TypeDiffere: typeDiffere,
+		})
+		if err != nil {
+			t.Fatalf("ParseDemande : %v", err)
+		}
+		res, err := moteur.Calculer(ctx, d)
+		if err != nil {
+			t.Fatalf("Calculer : %v", err)
+		}
+		return res
+	}
+
+	total := calculer("total")
+
+	// Valeurs d'un modele decimal independant.
+	if got := total.Recapitulatif.InteretsCapitalises.String(); got != "46148.691" {
+		t.Errorf("interets capitalises %s, attendu 46148.691", got)
+	}
+	if got := total.Recapitulatif.TotalInterets.String(); got != "329204.195" {
+		t.Errorf("total interets %s, attendu 329204.195", got)
+	}
+	if got := total.Recapitulatif.DerniereMensualite.String(); got != "2681.695" {
+		t.Errorf("derniere mensualite %s, attendu 2681.695", got)
+	}
+
+	// Pendant la franchise totale, rien n'est du et le solde grossit.
+	for _, n := range []int{1, 12, 24} {
+		e := total.Echeancier[n-1]
+		if millimes(t, e.Mensualite) != 0 {
+			t.Errorf("mois %d : mensualite %s, attendue nulle", n, e.Mensualite)
+		}
+		if millimes(t, e.Capitalise) != millimes(t, e.Interets) {
+			t.Errorf("mois %d : capitalise %s, interets %s : tout l'interet "+
+				"devrait etre capitalise", n, e.Capitalise, e.Interets)
+		}
+	}
+	if millimes(t, total.Echeancier[23].Solde) <=
+		millimes(t, total.Echeancier[0].Solde) {
+		t.Error("le solde devrait grossir pendant la franchise totale")
+	}
+	// Le capital amorti est le capital emprunte grossi des interets.
+	if got, veut := millimes(t, total.Echeancier[23].Solde),
+		int64(250000000)+millimes(t, total.Recapitulatif.InteretsCapitalises); got != veut {
+		t.Errorf("solde en fin de franchise %d, attendu %d", got, veut)
+	}
+	// Passe la franchise, plus rien n'est capitalise.
+	for _, e := range total.Echeancier[24:] {
+		if millimes(t, e.Capitalise) != 0 {
+			t.Errorf("mois %d : capitalise %s hors franchise", e.N, e.Capitalise)
+		}
+	}
+
+	// La franchise partielle ne capitalise rien, et coute donc moins cher.
+	partiel := calculer("partiel")
+	if got := millimes(t, partiel.Recapitulatif.InteretsCapitalises); got != 0 {
+		t.Errorf("franchise partielle : capitalise %d, attendu 0", got)
+	}
+	if millimes(t, partiel.Recapitulatif.TotalInterets) >=
+		millimes(t, total.Recapitulatif.TotalInterets) {
+		t.Error("la franchise totale devrait couter plus cher en interets")
+	}
+	// Sous franchise partielle, les interets sont dus des le premier mois.
+	if millimes(t, partiel.Echeancier[0].Mensualite) == 0 {
+		t.Error("la franchise partielle devrait laisser les interets dus")
+	}
+
+	// Les invariants tiennent sous les deux franchises, et sur les trois
+	// methodes : l'invariant 1 tient compte de la capitalisation.
+	for _, methode := range MethodesAcceptees() {
+		for _, typ := range TypesDiffereAcceptes() {
+			t.Run(methode+"/"+typ, func(t *testing.T) {
+				verifierInvariants(t, moteur, Parametres{
+					Capital: "250000.000", Taux: "8.5", Mois: "240",
+					Methode: methode, Differe: "24", TypeDiffere: typ,
+					TauxAssurance: "0.36", Assiette: "capital_restant_du",
+				})
+			})
+		}
+	}
+}
+
+func TestParseDemandeValideLeTypeDeDiffere(t *testing.T) {
+	cas := []struct{ nom, differe, typ, champ string }{
+		{"type inconnu", "24", "moitie", "type_differe"},
+		// Qualifier une franchise qui n'existe pas est une erreur de saisie.
+		{"type sans differe", "", "total", "type_differe"},
+		{"type avec un differe nul", "0", "total", "type_differe"},
+	}
+	for _, c := range cas {
+		_, err := ParseDemande(Parametres{
+			Capital: "250000.000", Taux: "8.5", Mois: "240",
+			Differe: c.differe, TypeDiffere: c.typ,
+		})
+		if err == nil {
+			t.Errorf("%s : aurait du echouer", c.nom)
+			continue
+		}
+		invalide, ok := err.(*ErreurValidation)
+		if !ok || invalide.Champ != c.champ {
+			t.Errorf("%s : erreur %v, champ attendu %q", c.nom, err, c.champ)
+		}
+	}
+
+	// Sans differe, le type reste absent de la reponse plutot que d'annoncer
+	// une franchise qui n'existe pas.
+	d, err := ParseDemande(Parametres{Capital: "250000.000", Taux: "8.5", Mois: "240"})
+	if err != nil {
+		t.Fatalf("ParseDemande : %v", err)
+	}
+	if d.TypeDiffere != nil {
+		t.Errorf("type_differe %q rendu sans differe", *d.TypeDiffere)
+	}
+	if d.CodeTypeDiffere != 'P' {
+		t.Errorf("lettre %q, attendu 'P' : le programme COBOL en exige une",
+			d.CodeTypeDiffere)
 	}
 }

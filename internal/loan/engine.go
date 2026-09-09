@@ -51,6 +51,11 @@ type Demande struct {
 	FraisDossierMillimes  int64 `json:"-"`
 	FraisGarantieMillimes int64 `json:"-"`
 	TauxAssuranceMillion  int64 `json:"-"`
+	// CodeTypeDiffere est la lettre attendue par le programme COBOL : une
+	// franchise partielle, ou totale.
+	CodeTypeDiffere byte `json:"-"`
+	// TypeDiffere est absent quand aucun differe n'est demande.
+	TypeDiffere *string `json:"type_differe,omitempty"`
 	// MoisAnticipe est l'echeance a laquelle le capital restant est solde.
 	// Zero signifie qu'aucun remboursement anticipe n'est simule.
 	MoisAnticipe int `json:"mois_remboursement_anticipe,omitempty"`
@@ -94,8 +99,8 @@ const (
 	tagEcheance  = 'E'
 	tagAnticipe  = 'A'
 	tagPartiel   = 'P'
-	longRecap    = 129
-	longEcheance = 89
+	longRecap    = 145
+	longEcheance = 103
 	longAnticipe = 97
 	longPartiel  = 116
 )
@@ -120,6 +125,11 @@ type Recapitulatif struct {
 	TotalVerse json.Number `json:"total_verse"`
 	// CoutCredit agrege interets, assurance et frais.
 	CoutCredit json.Number `json:"cout_credit"`
+	// InteretsCapitalises est la part des interets ajoutee au capital au lieu
+	// d'etre versee, sous franchise totale. Nulle autrement. La somme des
+	// parts de capital de l'echeancier vaut alors le capital emprunte plus ce
+	// montant, et non le capital seul.
+	InteretsCapitalises json.Number `json:"interets_capitalises"`
 	// Teg est le taux effectif global au sens du decret n° 2000-462 : le taux
 	// de periode est resolu par methode actuarielle, puis annualise de facon
 	// proportionnelle, et exprime avec deux decimales. Sans frais ni
@@ -145,6 +155,10 @@ type Echeance struct {
 	// Mensualite est ce que l'emprunteur verse : echeance + assurance.
 	Mensualite json.Number `json:"mensualite"`
 	Solde      json.Number `json:"solde"`
+	// Capitalise est la part de l'interet du mois ajoutee au capital au lieu
+	// d'etre versee. Nulle hors franchise totale, ou elle vaut l'interet
+	// entier : l'echeance vaut alors interets + capital - capitalise.
+	Capitalise json.Number `json:"capitalise"`
 }
 
 // Anticipe compare un remboursement anticipe total a la poursuite jusqu'au
@@ -259,20 +273,22 @@ func NewMoteur(chemin, cheminCapacite string, delai time.Duration) *Moteur {
 	return &Moteur{Chemin: chemin, CheminCapacite: cheminCapacite, Delai: delai}
 }
 
-// ligneEntree rend les 92 caracteres attendus par le programme : capital
+// ligneEntree rend les 93 caracteres attendus par le programme : capital
 // 9(11)V999, taux 9(2)V9(6), duree 9(4), frais de dossier et de garantie
 // 9(9)V999, taux d'assurance 9(2)V9(6), taux effectif moyen 9(2)V99, differe
 // 9(3), mois du remboursement anticipe 9(4), taux d'indemnite 9(2)V9(4),
 // montant rembourse par anticipation 9(11)V999, puis les lettres de la
-// methode, de l'assiette d'assurance et du mode de remboursement anticipe.
+// methode, de l'assiette d'assurance, du mode de remboursement anticipe et du
+// type de differe.
 func ligneEntree(d Demande) string {
-	return fmt.Sprintf("%014d%08d%04d%012d%012d%08d%04d%03d%04d%06d%014d%c%c%c\n",
+	return fmt.Sprintf("%014d%08d%04d%012d%012d%08d%04d%03d%04d%06d%014d%c%c%c%c\n",
 		d.CapitalMillimes, d.TauxMillioniemes, d.Mois,
 		d.FraisDossierMillimes, d.FraisGarantieMillimes,
 		d.TauxAssuranceMillion, d.TemCentiemes, d.DiffereMois,
 		d.MoisAnticipe, d.TauxIndemniteDixMillieme,
 		d.MontantAnticipeMillimes,
-		d.CodeMethode, d.CodeAssiette, d.CodeModeAnticipe)
+		d.CodeMethode, d.CodeAssiette, d.CodeModeAnticipe,
+		d.CodeTypeDiffere)
 }
 
 // Calculer produit l'echeancier de la demande.
@@ -424,6 +440,7 @@ func lireRecapitulatif(ligne string, r *Recapitulatif) error {
 		{&r.TotalFrais, 65, 79},
 		{&r.TotalVerse, 79, 95},
 		{&r.CoutCredit, 95, 111},
+		{&r.InteretsCapitalises, 129, 145},
 	}
 	for _, c := range champs {
 		if *c.cible, err = montant(ligne[c.debut:c.fin]); err != nil {
@@ -566,6 +583,7 @@ func lireEcheance(ligne string, e *Echeance) error {
 		{&e.Assurance, 47, 61},
 		{&e.Mensualite, 61, 75},
 		{&e.Solde, 75, 89},
+		{&e.Capitalise, 89, 103},
 	}
 	for _, c := range champs {
 		if *c.cible, err = montant(ligne[c.debut:c.fin]); err != nil {

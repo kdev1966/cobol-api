@@ -13,7 +13,7 @@ capacite="${2:?usage: fumee-cobol.sh <amortissement> <capacite>}"
 
 # 250 000,000 dinars a 8,5 % sur 240 mois, annuite constante, sans frais,
 # sans assurance et sans verification du taux excessif.
-entree="00000250000000085000000240000000000000000000000000000000000000000000000000000000000000000ANT"
+entree="00000250000000085000000240000000000000000000000000000000000000000000000000000000000000000ANTP"
 
 # Mensualite 2169,558 DT : le recapitulatif porte 0240 puis 00000002169558.
 prefixe_attendu="^R024000000002169558"

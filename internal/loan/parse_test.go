@@ -100,7 +100,7 @@ func TestParseDemandeRefuseHorsBornes(t *testing.T) {
 	}
 }
 
-// La disposition de la ligne d'entree est un contrat avec le PIC X(92) du
+// La disposition de la ligne d'entree est un contrat avec le PIC X(93) du
 // programme COBOL. Les positions sont derivees d'une table de largeurs plutot
 // que comptees a la main : ajouter un champ n'oblige alors qu'a une ligne de
 // plus, sans recalculer tous les decalages.
@@ -124,6 +124,7 @@ func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
 		{"methode", 1, "A"},
 		{"assiette", 1, "R"},
 		{"mode_anticipe", 1, "D"},
+		{"type_differe", 1, "T"},
 	}
 
 	d, err := ParseDemande(Parametres{
@@ -132,6 +133,7 @@ func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
 		TauxAssurance: "0.36", Assiette: "capital_restant_du",
 		Tem: "10.25", Differe: "24", MoisAnticipe: "120", Indemnite: "1",
 		MontantAnticipe: "50000.000", Mode: "duree_reduite",
+		TypeDiffere: "total",
 	})
 	if err != nil {
 		t.Fatalf("ParseDemande : %v", err)
@@ -164,11 +166,11 @@ func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
 		t.Fatalf("ParseDemande : %v", err)
 	}
 	ligneNue := strings.TrimSuffix(ligneEntree(nu), "\n")
-	if got := ligneNue[26 : total-3]; strings.Trim(got, "0") != "" {
+	if got := ligneNue[26 : total-4]; strings.Trim(got, "0") != "" {
 		t.Errorf("champs facultatifs non nuls : %q", got)
 	}
-	if got := ligneNue[total-3:]; got != "ANT" {
-		t.Errorf("lettres par defaut : %q, attendu \"ANT\"", got)
+	if got := ligneNue[total-4:]; got != "ANTP" {
+		t.Errorf("lettres par defaut : %q, attendu \"ANTP\"", got)
 	}
 
 	// Chaque methode doit poser sa lettre.
@@ -183,7 +185,7 @@ func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ParseDemande(%q) : %v", saisie, err)
 		}
-		if got := ligneEntree(d)[total-3]; got != lettre {
+		if got := ligneEntree(d)[total-4]; got != lettre {
 			t.Errorf("methode %q : lettre %q, attendu %q", saisie, got, lettre)
 		}
 	}

@@ -142,7 +142,7 @@ func (s *Serveur) index(w http.ResponseWriter, r *http.Request) {
 		"endpoints": []map[string]any{
 			{
 				"method":              "GET",
-				"path":                "/v1/loans/schedule?capital=&taux=&mois=&methode=&frais_dossier=&frais_garantie=&taux_assurance=&assiette_assurance=&differe=&mois_remboursement_anticipe=&indemnite=&montant_remboursement_anticipe=&mode_remboursement_anticipe=&categorie=",
+				"path":                "/v1/loans/schedule?capital=&taux=&mois=&methode=&frais_dossier=&frais_garantie=&taux_assurance=&assiette_assurance=&differe=&type_differe=&mois_remboursement_anticipe=&indemnite=&montant_remboursement_anticipe=&mode_remboursement_anticipe=&categorie=",
 				"auth":                true,
 				"description":         "Echeancier de pret",
 				"methodes":            loan.MethodesAcceptees(),
@@ -150,6 +150,7 @@ func (s *Serveur) index(w http.ResponseWriter, r *http.Request) {
 				"assiettes_assurance": loan.AssiettesAcceptees(),
 				"modes_anticipe":      loan.ModesAcceptes(),
 				"mode_par_defaut":     loan.ModeParDefaut,
+				"types_differe":       loan.TypesDiffereAcceptes(),
 			},
 			{
 				"method":      "GET",
@@ -311,6 +312,19 @@ func (s *Serveur) capacite(w http.ResponseWriter, r *http.Request) {
 		Assiette:      q.Get("assiette_assurance"),
 		Differe:       q.Get("differe"),
 	}
+
+	// Le calcul inverse ne modelise pas la capitalisation des interets : il
+	// deduit le capital d'une mensualite, or sous franchise totale le capital
+	// amorti n'est pas celui qui est emprunte. Refuser vaut mieux que rendre
+	// un capital faux.
+	if t := q.Get("type_differe"); t != "" && t != "partiel" && t != "P" {
+		s.repondreValidation(w, &loan.ErreurValidation{
+			Champ:   "type_differe",
+			Message: "le calcul de capacite ne modelise que le differe partiel",
+		})
+		return
+	}
+
 	budget, err := loan.ParseDemandeCapacite(params)
 	if err != nil {
 		s.repondreValidation(w, err)
@@ -403,6 +417,7 @@ func (s *Serveur) echeancier(w http.ResponseWriter, r *http.Request) {
 		Indemnite:       q.Get("indemnite"),
 		MontantAnticipe: q.Get("montant_remboursement_anticipe"),
 		Mode:            q.Get("mode_remboursement_anticipe"),
+		TypeDiffere:     q.Get("type_differe"),
 		Tem:             q.Get("tem"),
 		Categorie:       q.Get("categorie"),
 	}, nil)

@@ -121,12 +121,43 @@ n=240   échéance 2263,471   intérêts   15,920   capital 2247,551  solde     
 
 Le crédit coûte plus cher — 281 446,923 DT d'intérêts contre 270 693,976 — et
 l'échéance d'amortissement est plus élevée, le même capital devant être remboursé
-en 216 mensualités au lieu de 240. Les quatre invariants tiennent inchangés : la
-somme des parts de capital reste exactement le capital emprunté.
+en 216 mensualités au lieu de 240.
 
-**Les intérêts ne sont pas capitalisés.** Un différé total le ferait, et
-demanderait de distinguer sur chaque ligne les intérêts payés de ceux ajoutés au
-capital — une colonne de plus, et l'invariant 1 à reformuler. Ce n'est pas fait.
+### Franchise partielle ou totale
+
+`type_differe` en décide, et l'écart est considérable :
+
+| | `partiel` (défaut) | `total` |
+|---|---|---|
+| Pendant la franchise | intérêts et assurance dus | **rien n'est versé** |
+| Les intérêts | sont payés | **grossissent le capital** |
+| Capital amorti ensuite | 250 000,000 | **296 148,691** |
+| Intérêts totaux | 281 446,923 | **329 204,195** |
+
+Sous franchise totale, les intérêts se **capitalisent** : ils s'ajoutent au
+capital, qui porte à son tour intérêt. Sur ce prêt, vingt-quatre mois sans rien
+verser coûtent 47 757,272 DT d'intérêts supplémentaires.
+
+Chaque ligne porte une colonne `capitalise` : la part de l'intérêt du mois
+ajoutée au capital au lieu d'être versée. Nulle hors franchise totale, elle vaut
+sinon l'intérêt entier. Deux invariants changent de forme, et seulement sous
+cette franchise :
+
+- **Invariant 1** : la somme des parts de capital vaut le capital emprunté
+  **plus les intérêts capitalisés** — 296 148,691 ici, et non 250 000,000.
+- **Invariant 4** : `échéance = intérêts + capital − capitalisé`. Pendant la
+  franchise totale, `0 = intérêts + 0 − intérêts`.
+
+Les quatre autres tiennent inchangés, et les six sont vérifiés sur les trois
+méthodes sous les deux franchises.
+
+**L'assurance reste due pendant la franchise totale** : la prime est due à
+l'assureur, non au prêteur. C'est un choix de modélisation, à confirmer contre
+le contrat d'assurance retenu.
+
+**Le calcul de capacité refuse un différé total** : il déduit un capital d'une
+mensualité, or le capital amorti n'est alors pas celui qui est emprunté. Refuser
+vaut mieux que rendre un capital faux.
 
 ## Le remboursement anticipé
 
@@ -537,8 +568,8 @@ privilégié et n'écrit rien sur disque.
 - Le barème doit être alimenté à chaque nouvel arrêté, par migration. Aucune
   interface d'administration n'existe.
 - La piste d'audit n'a ni purge ni rétention : elle croît indéfiniment.
-- Le différé total, qui capitalise les intérêts de la franchise, n'est pas
-  implémenté.
+- Le différé total n'est pas offert au calcul de capacité, qui ne modélise pas
+  la capitalisation.
 - Le remboursement anticipé, total ou partiel, est simulé : l'échéancier rendu
   reste celui du contrat. Un tableau d'amortissement réécrit après l'opération
   n'est pas proposé.

@@ -252,7 +252,7 @@
             "name": "differe",
             "in": "query",
             "required": false,
-            "description": "Nombre d'echeances en franchise partielle : seuls les interets et l'assurance y sont dus, le capital reste intact. L'amortissement se fait ensuite sur la duree restante, d'ou une echeance plus elevee et un credit plus cher. Les interets ne sont pas capitalises. Doit laisser au moins une echeance amortissante.",
+            "description": "Nombre d'echeances en franchise partielle : seuls les interets et l'assurance y sont dus, le capital reste intact. L'amortissement se fait ensuite sur la duree restante, d'ou une echeance plus elevee et un credit plus cher. Les interets ne sont pas capitalises. Doit laisser au moins une echeance amortissante. Sa nature se precise avec type_differe.",
             "schema": {
               "type": "integer",
               "minimum": 0,
@@ -311,6 +311,21 @@
               "default": "total"
             },
             "example": "duree_reduite"
+          },
+          {
+            "name": "type_differe",
+            "in": "query",
+            "required": false,
+            "description": "Nature de la franchise. partiel : les interets sont dus chaque mois et le capital reste intact, ils ne se capitalisent donc pas. total : rien n'est verse et les interets viennent grossir le capital, qui est ensuite amorti. Sans objet sans differe. Le calcul de capacite ne modelise que le differe partiel.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "partiel",
+                "total"
+              ],
+              "default": "partiel"
+            },
+            "example": "total"
           }
         ],
         "responses": {
@@ -881,7 +896,8 @@
           "tem",
           "seuil_excessif",
           "conforme",
-          "marge"
+          "marge",
+          "interets_capitalises"
         ],
         "properties": {
           "echeances": {
@@ -957,6 +973,11 @@
             ],
             "description": "Seuil moins TEG, en points de pourcentage. Negatif si le pret est excessif.",
             "example": 3.8
+          },
+          "interets_capitalises": {
+            "type": "number",
+            "description": "Part des interets ajoutee au capital au lieu d'etre versee, sous franchise totale. Nulle autrement. La somme des parts de capital de l'echeancier vaut alors le capital emprunte plus ce montant.",
+            "example": 46148.691
           }
         }
       },
@@ -969,7 +990,8 @@
           "capital",
           "assurance",
           "mensualite",
-          "solde"
+          "solde",
+          "capitalise"
         ],
         "properties": {
           "n": {
@@ -1003,6 +1025,11 @@
             "type": "number",
             "description": "Capital restant du apres cette echeance. Nul apres la derniere.",
             "example": 249601.275
+          },
+          "capitalise": {
+            "type": "number",
+            "description": "Part de l'interet du mois ajoutee au capital au lieu d'etre versee. Nulle hors franchise totale, ou elle vaut l'interet entier : echeance = interets + capital - capitalise.",
+            "example": 0
           }
         }
       },

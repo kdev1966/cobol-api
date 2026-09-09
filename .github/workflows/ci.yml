@@ -265,6 +265,33 @@ jobs:
 
       # Solder par anticipation economise les interets restants, moins
       # l'indemnite. Solder a la derniere echeance revient au terme.
+      # Sous franchise totale, rien n'est verse pendant le differe et les
+      # interets grossissent le capital, qui est ensuite amorti.
+      - name: Verifier le differe total
+        run: |
+          b='http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240&differe=24'
+
+          t=$(curl -sf -H 'X-API-Key: cle-de-ci' "$b&type_differe=total")
+          echo "$t" | grep -q '"interets_capitalises":46148.691'
+          echo "$t" | grep -q '"total_interets":329204.195'
+          # Rien n'est du le premier mois, et tout l'interet est capitalise.
+          echo "$t" | grep -q '"n":1,"echeance":0.000,"interets":1770.833,"capital":0.000,"assurance":0.000,"mensualite":0.000,"solde":251770.833,"capitalise":1770.833'
+
+          # La franchise partielle ne capitalise rien et coute moins cher.
+          p=$(curl -sf -H 'X-API-Key: cle-de-ci' "$b&type_differe=partiel")
+          echo "$p" | grep -q '"interets_capitalises":0.000'
+          echo "$p" | grep -q '"total_interets":281446.923'
+
+          # Qualifier une franchise qui n'existe pas est une erreur de saisie.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240&type_differe=total')
+          test "$code" = "400"
+
+          # Le calcul inverse ne modelise pas la capitalisation : il refuse.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            'http://localhost:3000/v1/loans/capacity?mensualite=2000.000&taux=8.5&mois=240&differe=24&type_differe=total')
+          test "$code" = "400"
+
       - name: Verifier le remboursement anticipe
         run: |
           base='http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240'
