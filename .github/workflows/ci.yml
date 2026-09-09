@@ -287,6 +287,47 @@ jobs:
             "$base&indemnite=1")
           test "$code" = "400"
 
+      # Rembourser une part du capital : la duree raccourcit, ou l'echeance
+      # s'allege. A montant egal, raccourcir la duree economise davantage.
+      - name: Verifier le remboursement partiel
+        run: |
+          base='http://localhost:3000/v1/loans/schedule?capital=250000.000&taux=8.5&mois=240'
+          part="&mois_remboursement_anticipe=120&indemnite=1&montant_remboursement_anticipe=50000.000"
+
+          d=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            "$base$part&mode_remboursement_anticipe=duree_reduite")
+          echo "$d" | grep -q '"duree":195'
+          echo "$d" | grep -q '"echeance_suivante":2169.558'
+          echo "$d" | grep -q '"total":472019.531'
+          echo "$d" | grep -q '"economie":48674.445'
+          # L'indemnite porte sur le capital rembourse, non sur le solde.
+          echo "$d" | grep -q '"indemnite":500.000'
+
+          m=$(curl -sf -H 'X-API-Key: cle-de-ci' \
+            "$base$part&mode_remboursement_anticipe=echeance_reduite")
+          echo "$m" | grep -q '"duree":240'
+          echo "$m" | grep -q '"echeance_suivante":1549.630'
+          echo "$m" | grep -q '"economie":23891.432'
+
+          # L'echeancier rendu reste celui du contrat.
+          test "$(echo "$d" | grep -o '"n":' | wc -l | tr -d ' ')" = "240"
+
+          # Un montant superieur au capital restant du ne se voit qu'une fois
+          # l'echeancier deroule : c'est une erreur de saisie, pas une panne.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            "$base&mois_remboursement_anticipe=120&mode_remboursement_anticipe=duree_reduite&montant_remboursement_anticipe=200000.000")
+          test "$code" = "400"
+
+          # Solder la totalite et n'en rembourser qu'une part s'excluent.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            "$base$part&mode_remboursement_anticipe=total")
+          test "$code" = "400"
+
+          # Sans capital amorti avant le terme, pas de duree a raccourcir.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-API-Key: cle-de-ci' \
+            "$base$part&methode=in_fine&mode_remboursement_anticipe=duree_reduite")
+          test "$code" = "400"
+
       - name: Verifier le bareme
         run: |
           liste=$(curl -sf -H 'X-API-Key: cle-de-ci' http://localhost:3000/v1/baremes)

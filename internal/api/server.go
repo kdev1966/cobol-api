@@ -142,12 +142,14 @@ func (s *Serveur) index(w http.ResponseWriter, r *http.Request) {
 		"endpoints": []map[string]any{
 			{
 				"method":              "GET",
-				"path":                "/v1/loans/schedule?capital=&taux=&mois=&methode=&frais_dossier=&frais_garantie=&taux_assurance=&assiette_assurance=&differe=&mois_remboursement_anticipe=&indemnite=&categorie=",
+				"path":                "/v1/loans/schedule?capital=&taux=&mois=&methode=&frais_dossier=&frais_garantie=&taux_assurance=&assiette_assurance=&differe=&mois_remboursement_anticipe=&indemnite=&montant_remboursement_anticipe=&mode_remboursement_anticipe=&categorie=",
 				"auth":                true,
 				"description":         "Echeancier de pret",
 				"methodes":            loan.MethodesAcceptees(),
 				"methode_par_defaut":  loan.MethodeParDefaut,
 				"assiettes_assurance": loan.AssiettesAcceptees(),
+				"modes_anticipe":      loan.ModesAcceptes(),
+				"mode_par_defaut":     loan.ModeParDefaut,
 			},
 			{
 				"method":      "GET",
@@ -388,19 +390,21 @@ func (s *Serveur) repondreValidation(w http.ResponseWriter, err error) {
 func (s *Serveur) echeancier(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	s.produireEcheancier(w, r, loan.Parametres{
-		Capital:       q.Get("capital"),
-		Taux:          q.Get("taux"),
-		Mois:          q.Get("mois"),
-		Methode:       q.Get("methode"),
-		FraisDossier:  q.Get("frais_dossier"),
-		FraisGarantie: q.Get("frais_garantie"),
-		TauxAssurance: q.Get("taux_assurance"),
-		Assiette:      q.Get("assiette_assurance"),
-		Differe:       q.Get("differe"),
-		MoisAnticipe:  q.Get("mois_remboursement_anticipe"),
-		Indemnite:     q.Get("indemnite"),
-		Tem:           q.Get("tem"),
-		Categorie:     q.Get("categorie"),
+		Capital:         q.Get("capital"),
+		Taux:            q.Get("taux"),
+		Mois:            q.Get("mois"),
+		Methode:         q.Get("methode"),
+		FraisDossier:    q.Get("frais_dossier"),
+		FraisGarantie:   q.Get("frais_garantie"),
+		TauxAssurance:   q.Get("taux_assurance"),
+		Assiette:        q.Get("assiette_assurance"),
+		Differe:         q.Get("differe"),
+		MoisAnticipe:    q.Get("mois_remboursement_anticipe"),
+		Indemnite:       q.Get("indemnite"),
+		MontantAnticipe: q.Get("montant_remboursement_anticipe"),
+		Mode:            q.Get("mode_remboursement_anticipe"),
+		Tem:             q.Get("tem"),
+		Categorie:       q.Get("categorie"),
 	}, nil)
 }
 
@@ -454,6 +458,13 @@ func (s *Serveur) produireEcheancier(w http.ResponseWriter, r *http.Request,
 			ecrireErreur(w, http.StatusGatewayTimeout, "Le calcul a depasse son delai")
 			return
 		}
+		// Certaines regles ne se verifient qu'une fois l'echeancier deroule :
+		// le refus vient alors du moteur, mais reste une erreur de saisie.
+		var refus *loan.ErreurRefus
+		if errors.As(err, &refus) {
+			ecrireErreur(w, http.StatusBadRequest, refus.Motif)
+			return
+		}
 		ecrireErreur(w, http.StatusInternalServerError, "Erreur interne")
 		return
 	}
@@ -476,6 +487,9 @@ func (s *Serveur) produireEcheancier(w http.ResponseWriter, r *http.Request,
 	}
 	if resultat.Anticipe != nil {
 		corps["anticipe"] = resultat.Anticipe
+	}
+	if resultat.Partiel != nil {
+		corps["remboursement_partiel"] = resultat.Partiel
 	}
 	if idSimulation != 0 {
 		corps["simulation_id"] = idSimulation

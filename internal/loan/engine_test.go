@@ -1191,3 +1191,308 @@ func TestParseDemandeValideLeRemboursementAnticipe(t *testing.T) {
 		}
 	}
 }
+
+// Rembourser une part du capital, puis raccourcir la duree ou alleger
+// l'echeance. Les valeurs sont celles d'un modele decimal independant.
+func TestRemboursementPartiel(t *testing.T) {
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
+	ctx := context.Background()
+
+	calculer := func(methode, mode, montant string) *Echeancier {
+		t.Helper()
+		d, err := ParseDemande(Parametres{
+			Capital: "250000.000", Taux: "8.5", Mois: "240", Methode: methode,
+			MoisAnticipe: "120", Indemnite: "1",
+			MontantAnticipe: montant, Mode: mode,
+		})
+		if err != nil {
+			t.Fatalf("ParseDemande : %v", err)
+		}
+		res, err := moteur.Calculer(ctx, d)
+		if err != nil {
+			t.Fatalf("Calculer : %v", err)
+		}
+		if res.Partiel == nil {
+			t.Fatal("aucun bloc de remboursement partiel")
+		}
+		return res
+	}
+
+	cas := []struct {
+		methode, mode    string
+		duree            int
+		echeanceSuivante string
+		total            string
+		totalTerme       string
+		economie         string
+		interetsEconomes string
+	}{
+		{"annuite_constante", "duree_reduite", 195, "2169.558",
+			"472019.531", "520693.976", "48674.445", "49174.445"},
+		{"annuite_constante", "echeance_reduite", 240, "1549.630",
+			"496802.544", "520693.976", "23891.432", "24391.432"},
+		{"capital_constant", "duree_reduite", 192, "1572.917",
+			"429708.289", "463385.350", "33677.061", "34177.061"},
+		{"capital_constant", "echeance_reduite", 240, "1156.250",
+			"442458.282", "463385.350", "20927.068", "21427.068"},
+		{"in_fine", "echeance_reduite", 240, "1416.667",
+			"633000.000", "674999.920", "41999.920", "42499.920"},
+	}
+
+	for _, c := range cas {
+		t.Run(c.methode+"/"+c.mode, func(t *testing.T) {
+			res := calculer(c.methode, c.mode, "50000.000")
+			p := res.Partiel
+
+			if p.Mois != 120 {
+				t.Errorf("mois %d, attendu 120", p.Mois)
+			}
+			if p.Mode != c.mode {
+				t.Errorf("mode %q, attendu %q", p.Mode, c.mode)
+			}
+			if p.Montant.String() != "50000.000" {
+				t.Errorf("montant %s, attendu 50000.000", p.Montant)
+			}
+			// L'indemnite porte sur le capital rembourse, non sur le solde.
+			if p.Indemnite.String() != "500.000" {
+				t.Errorf("indemnite %s, attendu 500.000", p.Indemnite)
+			}
+			if p.Duree != c.duree {
+				t.Errorf("duree %d, attendu %d", p.Duree, c.duree)
+			}
+			if p.EcheanceSuivante.String() != c.echeanceSuivante {
+				t.Errorf("echeance suivante %s, attendu %s",
+					p.EcheanceSuivante, c.echeanceSuivante)
+			}
+			for _, v := range []struct {
+				nom     string
+				got     interface{ String() string }
+				attendu string
+			}{
+				{"total", p.Total, c.total},
+				{"total au terme", p.TotalTerme, c.totalTerme},
+				{"economie", p.Economie, c.economie},
+				{"interets economises", p.InteretsEconomises, c.interetsEconomes},
+			} {
+				if v.got.String() != v.attendu {
+					t.Errorf("%s %s, attendu %s", v.nom, v.got, v.attendu)
+				}
+			}
+
+			// L'economie est la difference des deux totaux.
+			if got, veut := millimes(t, p.Economie),
+				millimes(t, p.TotalTerme)-millimes(t, p.Total); got != veut {
+				t.Errorf("economie %d, attendu %d", got, veut)
+			}
+			// Elle vaut les interets economises moins l'indemnite.
+			if got, veut := millimes(t, p.Economie),
+				millimes(t, p.InteretsEconomises)-
+					millimes(t, p.Indemnite); got != veut {
+				t.Errorf("economie %d, interets moins indemnite %d", got, veut)
+			}
+
+			// L'echeancier rendu reste celui du contrat : le remboursement
+			// anticipe est simule, il ne le reecrit pas.
+			if len(res.Echeancier) != 240 {
+				t.Errorf("echeancier de %d lignes, attendu 240 : le contrat",
+					len(res.Echeancier))
+			}
+			if res.Anticipe != nil {
+				t.Error("un remboursement partiel n'est pas un solde total")
+			}
+		})
+	}
+
+	// Raccourcir la duree laisse l'echeance intacte ; l'alleger laisse la
+	// duree intacte. Les deux modes s'opposent terme a terme.
+	reduite := calculer("annuite_constante", "duree_reduite", "50000.000")
+	allegee := calculer("annuite_constante", "echeance_reduite", "50000.000")
+	if reduite.Partiel.Duree >= allegee.Partiel.Duree {
+		t.Error("la duree reduite devrait raccourcir le pret")
+	}
+	if millimes(t, allegee.Partiel.EcheanceSuivante) >=
+		millimes(t, reduite.Partiel.EcheanceSuivante) {
+		t.Error("l'echeance reduite devrait alleger le versement")
+	}
+	// A montant egal, raccourcir la duree economise davantage : le capital
+	// cesse plus tot de porter interet.
+	if millimes(t, reduite.Partiel.Economie) <=
+		millimes(t, allegee.Partiel.Economie) {
+		t.Error("la duree reduite devrait economiser davantage")
+	}
+}
+
+// Rembourser par anticipation la totalite du capital restant du revient au
+// solde total : les deux chemins doivent donner le meme cout.
+func TestRembourserToutLeSoldeEquivautAuSoldeTotal(t *testing.T) {
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
+	ctx := context.Background()
+
+	calculer := func(p Parametres) *Echeancier {
+		t.Helper()
+		d, err := ParseDemande(p)
+		if err != nil {
+			t.Fatalf("ParseDemande : %v", err)
+		}
+		res, err := moteur.Calculer(ctx, d)
+		if err != nil {
+			t.Fatalf("Calculer : %v", err)
+		}
+		return res
+	}
+
+	base := Parametres{Capital: "250000.000", Taux: "8.5", Mois: "240",
+		MoisAnticipe: "120"}
+
+	total := calculer(base).Anticipe
+	if total == nil {
+		t.Fatal("aucun bloc de solde total")
+	}
+
+	partiel := calculer(Parametres{Capital: "250000.000", Taux: "8.5",
+		Mois: "240", MoisAnticipe: "120", Mode: "duree_reduite",
+		MontantAnticipe: total.SoldeRestant.String()}).Partiel
+	if partiel == nil {
+		t.Fatal("aucun bloc de remboursement partiel")
+	}
+
+	if partiel.Total.String() != total.TotalAnticipe.String() {
+		t.Errorf("total partiel %s, total du solde %s",
+			partiel.Total, total.TotalAnticipe)
+	}
+	if partiel.Economie.String() != total.Economie.String() {
+		t.Errorf("economie partielle %s, economie du solde %s",
+			partiel.Economie, total.Economie)
+	}
+	// Le pret s'arrete au mois du remboursement, et rien n'est du ensuite.
+	if partiel.Duree != 120 {
+		t.Errorf("duree %d, attendu 120", partiel.Duree)
+	}
+	if millimes(t, partiel.EcheanceSuivante) != 0 {
+		t.Errorf("echeance suivante %s, attendue nulle", partiel.EcheanceSuivante)
+	}
+}
+
+func TestParseDemandeValideLeRemboursementPartiel(t *testing.T) {
+	cas := []struct {
+		nom, methode, mois, mode, montant, champ string
+	}{
+		// Solder la totalite ne laisse rien a rembourser partiellement,
+		// et reciproquement : les deux operations s'excluent.
+		{"montant avec le mode total", "", "120", "total", "50000.000",
+			"montant_remboursement_anticipe"},
+		{"mode partiel sans montant", "", "120", "duree_reduite", "",
+			"montant_remboursement_anticipe"},
+		{"montant nul", "", "120", "duree_reduite", "0",
+			"montant_remboursement_anticipe"},
+		{"montant non numerique", "", "120", "duree_reduite", "abc",
+			"montant_remboursement_anticipe"},
+		// Il doit rester une echeance apres l'operation.
+		{"partiel a la derniere echeance", "", "240", "duree_reduite",
+			"1000.000", "mois_remboursement_anticipe"},
+		// Sans amortissement avant le terme, il n'y a pas de duree a
+		// raccourcir.
+		{"duree reduite in fine", "in_fine", "120", "duree_reduite",
+			"50000.000", "mode_remboursement_anticipe"},
+		{"mode inconnu", "", "120", "moitie_moitie", "50000.000",
+			"mode_remboursement_anticipe"},
+		// Preciser un mode ou un montant sans mois est une erreur de saisie
+		// qu'il vaut mieux signaler que taire.
+		{"mode sans mois", "", "", "duree_reduite", "",
+			"mode_remboursement_anticipe"},
+		{"montant sans mois", "", "", "", "50000.000",
+			"montant_remboursement_anticipe"},
+	}
+	for _, c := range cas {
+		_, err := ParseDemande(Parametres{
+			Capital: "250000.000", Taux: "8.5", Mois: "240",
+			Methode: c.methode, MoisAnticipe: c.mois,
+			Mode: c.mode, MontantAnticipe: c.montant,
+		})
+		if err == nil {
+			t.Errorf("%s : aurait du echouer", c.nom)
+			continue
+		}
+		invalide, ok := err.(*ErreurValidation)
+		if !ok || invalide.Champ != c.champ {
+			t.Errorf("%s : erreur %v, champ attendu %q", c.nom, err, c.champ)
+		}
+	}
+}
+
+// Le programme COBOL refuse lui aussi les combinaisons incoherentes : la
+// validation Go n'est pas sa seule protection.
+func TestLeProgrammeRefuseUnMontantSuperieurAuSolde(t *testing.T) {
+	moteur := NewMoteur(binaire(t), binaireCapacite(t), 0)
+
+	d, err := ParseDemande(Parametres{
+		Capital: "250000.000", Taux: "8.5", Mois: "240",
+		MoisAnticipe: "120", Mode: "duree_reduite",
+		MontantAnticipe: "200000.000",
+	})
+	if err != nil {
+		t.Fatalf("ParseDemande : %v", err)
+	}
+	// Le solde au mois 120 vaut 174984.575 : en rembourser 200000 n'a pas
+	// de sens, et seul le deroulement de l'echeancier peut le savoir.
+	if _, err := moteur.Calculer(context.Background(), d); err == nil {
+		t.Error("un montant superieur au capital restant aurait du echouer")
+	}
+}
+
+// Le code de retour distingue un refus de saisie d'un echec technique. Le
+// confondre rendrait un 500 la ou le client a simplement mal saisi, ou pire,
+// un 400 rassurant sur un moteur en panne.
+func TestSeulLeCodeDeRefusDonneUneErreurDeSaisie(t *testing.T) {
+	cas := []struct {
+		code   int
+		motif  string
+		refuse bool
+	}{
+		{codeRefus, "le montant rembourse depasse le capital restant", true},
+		{2, "entree malformee", false},
+		{3, "capital et duree doivent etre non nuls", false},
+		{1, "", false},
+	}
+
+	for _, c := range cas {
+		script := filepath.Join(t.TempDir(), "faux.sh")
+		contenu := fmt.Sprintf("#!/bin/sh\nprintf '%%s' %q >&2\nexit %d\n",
+			c.motif, c.code)
+		if err := os.WriteFile(script, []byte(contenu), 0o700); err != nil {
+			t.Fatalf("ecriture du script : %v", err)
+		}
+
+		d, err := ParseDemande(Parametres{
+			Capital: "250000.000", Taux: "8.5", Mois: "240"})
+		if err != nil {
+			t.Fatalf("ParseDemande : %v", err)
+		}
+
+		_, err = NewMoteur(script, "", 0).Calculer(context.Background(), d)
+		if err == nil {
+			t.Errorf("code %d : aurait du echouer", c.code)
+			continue
+		}
+
+		var refus *ErreurRefus
+		estRefus := errors.As(err, &refus)
+		if estRefus != c.refuse {
+			t.Errorf("code %d : refus de saisie %v, attendu %v (erreur %v)",
+				c.code, estRefus, c.refuse, err)
+			continue
+		}
+		if c.refuse {
+			if refus.Motif != c.motif {
+				t.Errorf("code %d : motif %q, attendu %q",
+					c.code, refus.Motif, c.motif)
+			}
+			// Le refus doit rester reconnaissable par errors.Is.
+			if !errors.Is(err, ErrDemandeRefusee) {
+				t.Errorf("code %d : errors.Is(ErrDemandeRefusee) est faux", c.code)
+			}
+		} else if !errors.Is(err, ErrProgramme) {
+			t.Errorf("code %d : erreur %v, attendu ErrProgramme", c.code, err)
+		}
+	}
+}

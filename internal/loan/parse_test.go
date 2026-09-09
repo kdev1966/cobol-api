@@ -100,7 +100,7 @@ func TestParseDemandeRefuseHorsBornes(t *testing.T) {
 	}
 }
 
-// La disposition de la ligne d'entree est un contrat avec le PIC X(77) du
+// La disposition de la ligne d'entree est un contrat avec le PIC X(92) du
 // programme COBOL. Les positions sont derivees d'une table de largeurs plutot
 // que comptees a la main : ajouter un champ n'oblige alors qu'a une ligne de
 // plus, sans recalculer tous les decalages.
@@ -120,8 +120,10 @@ func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
 		{"differe", 3, "024"},
 		{"mois_anticipe", 4, "0120"},
 		{"taux_indemnite", 6, "010000"},
+		{"montant_anticipe", 14, "00000050000000"},
 		{"methode", 1, "A"},
 		{"assiette", 1, "R"},
+		{"mode_anticipe", 1, "D"},
 	}
 
 	d, err := ParseDemande(Parametres{
@@ -129,6 +131,7 @@ func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
 		FraisDossier: "1500.000", FraisGarantie: "900.500",
 		TauxAssurance: "0.36", Assiette: "capital_restant_du",
 		Tem: "10.25", Differe: "24", MoisAnticipe: "120", Indemnite: "1",
+		MontantAnticipe: "50000.000", Mode: "duree_reduite",
 	})
 	if err != nil {
 		t.Fatalf("ParseDemande : %v", err)
@@ -161,11 +164,11 @@ func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
 		t.Fatalf("ParseDemande : %v", err)
 	}
 	ligneNue := strings.TrimSuffix(ligneEntree(nu), "\n")
-	if got := ligneNue[26 : total-2]; strings.Trim(got, "0") != "" {
+	if got := ligneNue[26 : total-3]; strings.Trim(got, "0") != "" {
 		t.Errorf("champs facultatifs non nuls : %q", got)
 	}
-	if got := ligneNue[total-2:]; got != "AN" {
-		t.Errorf("methode et assiette par defaut : %q, attendu \"AN\"", got)
+	if got := ligneNue[total-3:]; got != "ANT" {
+		t.Errorf("lettres par defaut : %q, attendu \"ANT\"", got)
 	}
 
 	// Chaque methode doit poser sa lettre.
@@ -180,7 +183,7 @@ func TestLigneEntreeRespecteLesPositionsCobol(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ParseDemande(%q) : %v", saisie, err)
 		}
-		if got := ligneEntree(d)[total-2]; got != lettre {
+		if got := ligneEntree(d)[total-3]; got != lettre {
 			t.Errorf("methode %q : lettre %q, attendu %q", saisie, got, lettre)
 		}
 	}

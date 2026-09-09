@@ -104,6 +104,33 @@ func MethodesAcceptees() []string {
 	return []string{"annuite_constante", "capital_constant", "in_fine"}
 }
 
+// ModeParDefaut : sans precision, un remboursement anticipe solde la totalite
+// du capital restant du. C'est la forme la plus courante, et celle que le
+// service offrait avant que le remboursement partiel n'existe.
+const ModeParDefaut = "total"
+
+// codesMode associe chaque suite donnee a un remboursement anticipe a la
+// lettre attendue par le programme COBOL.
+var codesMode = map[string]byte{
+	"total":            'T',
+	"duree_reduite":    'D',
+	"echeance_reduite": 'M',
+	"T":                'T',
+	"D":                'D',
+	"M":                'M',
+}
+
+var libellesMode = map[byte]string{
+	'T': "total",
+	'D': "duree_reduite",
+	'M': "echeance_reduite",
+}
+
+// ModesAcceptees liste les libelles canoniques.
+func ModesAcceptes() []string {
+	return []string{"total", "duree_reduite", "echeance_reduite"}
+}
+
 // ParseDemande valide les parametres et rend une demande prete a calculer.
 // Les bornes protegent a la fois les PIC du programme COBOL et la taille de
 // la reponse.
@@ -122,9 +149,14 @@ type Parametres struct {
 	// Differe est le nombre d'echeances en franchise partielle.
 	Differe string
 	// MoisAnticipe est l'echeance a laquelle simuler un remboursement
-	// anticipe total, et Indemnite le taux applique au capital solde.
+	// anticipe, et Indemnite le taux applique au capital rembourse.
 	MoisAnticipe string
 	Indemnite    string
+	// MontantAnticipe est le capital rembourse par anticipation, et Mode la
+	// suite donnee a l'operation : solder la totalite, raccourcir la duree,
+	// ou alleger l'echeance.
+	MontantAnticipe string
+	Mode            string
 	// Categorie designe la categorie de concours dont le taux effectif moyen
 	// sera lu dans le bareme.
 	Categorie string
@@ -265,9 +297,22 @@ func ParseDemande(p Parametres) (Demande, error) {
 		}
 	}
 
+	// Le mode se lit meme sans remboursement anticipe : le preciser seul est
+	// une erreur de saisie qu'il vaut mieux signaler que taire.
+	mode := strings.TrimSpace(p.Mode)
+	if mode == "" {
+		mode = ModeParDefaut
+	}
+	codeMode, connu := codesMode[mode]
+	if !connu {
+		return Demande{}, &ErreurValidation{"mode_remboursement_anticipe",
+			"doit valoir " + strings.Join(ModesAcceptes(), ", ")}
+	}
+
 	var moisAnticipe int
 	var indemnite int64
-	var indemniteAffichee *string
+	var montantAnticipe int64
+	var indemniteAffichee, montantAffiche, modeAffiche *string
 	if brut := strings.TrimSpace(p.MoisAnticipe); brut != "" {
 		moisAnticipe, err = strconv.Atoi(brut)
 		if err != nil || moisAnticipe < 1 || moisAnticipe > n {
@@ -289,9 +334,60 @@ func ParseDemande(p Parametres) (Demande, error) {
 		}
 		affiche := formaterEchelle(indemnite, 4)
 		indemniteAffichee = &affiche
-	} else if strings.TrimSpace(p.Indemnite) != "" {
-		return Demande{}, &ErreurValidation{"indemnite",
-			"sans objet sans mois_remboursement_anticipe"}
+
+		if codeMode == 'T' {
+			// Solder la totalite ne laisse rien a rembourser partiellement.
+			if strings.TrimSpace(p.MontantAnticipe) != "" {
+				return Demande{}, &ErreurValidation{"montant_remboursement_anticipe",
+					"sans objet quand le mode est total"}
+			}
+		} else {
+			montantAnticipe, err = decimalVersEntier(
+				strings.TrimSpace(p.MontantAnticipe), DecimalesMonnaie)
+			if err != nil {
+				return Demande{}, &ErreurValidation{"montant_remboursement_anticipe",
+					err.Error()}
+			}
+			if montantAnticipe < 1 || montantAnticipe > CapitalMax {
+				return Demande{}, &ErreurValidation{"montant_remboursement_anticipe",
+					fmt.Sprintf("doit etre compris entre %s et %s dinars",
+						formaterEchelle(1, DecimalesMonnaie),
+						formaterEchelle(CapitalMax, DecimalesMonnaie))}
+			}
+			// Il doit rester une echeance apres l'operation pour que
+			// raccourcir la duree ou alleger l'echeance ait un sens.
+			if moisAnticipe >= n {
+				return Demande{}, &ErreurValidation{"mois_remboursement_anticipe",
+					fmt.Sprintf("doit etre un entier entre 1 et %d "+
+						"pour un remboursement partiel", n-1)}
+			}
+			// Sans amortissement avant le terme, il n'y a pas de duree a
+			// raccourcir : le capital est du en une fois, a la fin.
+			if codeMode == 'D' && code == 'I' {
+				return Demande{}, &ErreurValidation{"mode_remboursement_anticipe",
+					"duree_reduite est sans objet avec la methode in_fine"}
+			}
+			m := formaterEchelle(montantAnticipe, DecimalesMonnaie)
+			montantAffiche = &m
+		}
+		l := libellesMode[codeMode]
+		modeAffiche = &l
+	} else {
+		if strings.TrimSpace(p.Indemnite) != "" {
+			return Demande{}, &ErreurValidation{"indemnite",
+				"sans objet sans mois_remboursement_anticipe"}
+		}
+		if strings.TrimSpace(p.MontantAnticipe) != "" {
+			return Demande{}, &ErreurValidation{"montant_remboursement_anticipe",
+				"sans objet sans mois_remboursement_anticipe"}
+		}
+		if strings.TrimSpace(p.Mode) != "" {
+			return Demande{}, &ErreurValidation{"mode_remboursement_anticipe",
+				"sans objet sans mois_remboursement_anticipe"}
+		}
+		// Sans remboursement anticipe, le programme COBOL attend la lettre
+		// du mode par defaut.
+		codeMode = 'T'
 	}
 
 	return Demande{
@@ -314,6 +410,10 @@ func ParseDemande(p Parametres) (Demande, error) {
 		MoisAnticipe:             moisAnticipe,
 		TauxIndemniteDixMillieme: indemnite,
 		TauxIndemnite:            indemniteAffichee,
+		MontantAnticipeMillimes:  montantAnticipe,
+		CodeModeAnticipe:         codeMode,
+		MontantAnticipe:          montantAffiche,
+		ModeAnticipe:             modeAffiche,
 		TemCentiemes:             tem,
 		Tem:                      temAffiche,
 	}, nil

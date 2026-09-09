@@ -154,6 +154,50 @@ Deux propriétés vérifiées par la suite de tests : solder à la dernière éc
 une indemnité assez forte peut rendre l'opération perdante, auquel cas
 l'économie est **nulle et jamais négative**.
 
+## Le remboursement partiel
+
+Rembourser une part du capital en cours de prêt, sans solder. Deux suites
+possibles, et c'est l'emprunteur qui choisit :
+
+| Mode | Ce qui bouge | Ce qui ne bouge pas |
+|---|---|---|
+| `duree_reduite` | la durée raccourcit | l'échéance reste la même |
+| `echeance_reduite` | l'échéance s'allège | la durée reste la même |
+
+```json
+"remboursement_partiel": {
+  "mois": 120,
+  "montant": 50000.000,
+  "indemnite": 500.000,
+  "mode": "duree_reduite",
+  "duree": 195,
+  "echeance_suivante": 2169.558,
+  "total": 472019.531,
+  "total_terme": 520693.976,
+  "economie": 48674.445,
+  "interets_economises": 49174.445
+}
+```
+
+Sur le prêt de référence, rembourser 50 000 DT au 120ᵉ mois raccourcit le prêt
+de 45 mois et économise 48 674,445 DT, contre 23 891,432 DT si l'on allège
+l'échéance. **À montant égal, raccourcir la durée rapporte davantage** : le
+capital cesse plus tôt de porter intérêt. C'est vérifié par un test, pas
+seulement affirmé ici.
+
+L'indemnité porte sur le **capital remboursé**, non sur le solde restant —
+d'où 500 DT ici, contre 1 749,846 DT pour un solde total au même mois.
+
+`duree_reduite` est refusé avec la méthode `in_fine` : aucun capital n'y est
+amorti avant le terme, il n'y a donc pas de durée à raccourcir.
+
+**L'échéancier rendu reste celui du contrat.** Un remboursement anticipé est
+une décision de l'emprunteur, pas une clause du prêt : le service le simule
+sans réécrire le tableau d'amortissement contractuel. Pour la même raison, le
+**TEG affiché reste celui du contrat** — le décret n° 2000-462 le définit sur
+l'échéancier contractuel, et un TEG recalculé sur une trajectoire écourtée
+ressemblerait à la mention légale sans en être une.
+
 ## La capacité d'emprunt
 
 Le calcul inverse : à partir d'une mensualité supportable, le capital maximal
@@ -495,5 +539,8 @@ privilégié et n'écrit rien sur disque.
 - La piste d'audit n'a ni purge ni rétention : elle croît indéfiniment.
 - Le différé total, qui capitalise les intérêts de la franchise, n'est pas
   implémenté.
-- Le remboursement anticipé n'est que total : rembourser une partie du capital,
-  puis raccourcir la durée ou réduire l'échéance, n'est pas proposé.
+- Le remboursement anticipé, total ou partiel, est simulé : l'échéancier rendu
+  reste celui du contrat. Un tableau d'amortissement réécrit après l'opération
+  n'est pas proposé.
+- Un seul remboursement anticipé par simulation. Des versements exceptionnels
+  répétés demanderaient une liste d'opérations en entrée.

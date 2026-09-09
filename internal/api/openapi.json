@@ -277,13 +277,40 @@
             "name": "indemnite",
             "in": "query",
             "required": false,
-            "description": "Taux d'indemnite applique au capital solde, en pourcent. L'indemnite de remboursement anticipe n'est pas encadree par la loi tunisienne mais par le contrat ; les banques pratiquent couramment 1 a 1,5 %. Sans objet sans mois_remboursement_anticipe.",
+            "description": "Taux d'indemnite applique au capital rembourse, en pourcent. L'indemnite de remboursement anticipe n'est pas encadree par la loi tunisienne mais par le contrat ; les banques pratiquent couramment 1 a 1,5 %. Sans objet sans mois_remboursement_anticipe.",
             "schema": {
               "type": "string",
               "pattern": "^\\d{1,2}(\\.\\d{1,4})?$",
               "default": "0"
             },
             "example": "1"
+          },
+          {
+            "name": "montant_remboursement_anticipe",
+            "in": "query",
+            "required": false,
+            "description": "Capital rembourse par anticipation, en dinars. Exige un mode autre que total, et sans objet quand le mode est total : solder la totalite du capital et n'en rembourser qu'une part sont deux operations distinctes.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,11}(\\.\\d{1,3})?$"
+            },
+            "example": "50000.000"
+          },
+          {
+            "name": "mode_remboursement_anticipe",
+            "in": "query",
+            "required": false,
+            "description": "Suite donnee au remboursement anticipe : solder la totalite du capital restant du, en rembourser une part et raccourcir la duree, ou en rembourser une part et alleger l'echeance. duree_reduite est sans objet avec la methode in_fine, ou aucun capital n'est amorti avant le terme.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "total",
+                "duree_reduite",
+                "echeance_reduite"
+              ],
+              "default": "total"
+            },
+            "example": "duree_reduite"
           }
         ],
         "responses": {
@@ -1032,6 +1059,14 @@
               }
             ],
             "description": "Present seulement quand un remboursement anticipe est demande."
+          },
+          "remboursement_partiel": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Partiel"
+              }
+            ],
+            "description": "Present seulement quand un remboursement partiel a ete demande. Exclut alors anticipe."
           }
         }
       },
@@ -1237,6 +1272,74 @@
           "interets_economises": {
             "type": "number",
             "example": 85362.441
+          }
+        }
+      },
+      "Partiel": {
+        "type": "object",
+        "description": "Comparaison entre rembourser une part du capital par anticipation et poursuivre le contrat jusqu'au terme. L'echeancier rendu reste celui du contrat : un remboursement anticipe est une decision de l'emprunteur, pas une clause, et le service le simule sans reecrire le tableau d'amortissement contractuel.",
+        "required": [
+          "mois",
+          "montant",
+          "indemnite",
+          "mode",
+          "duree",
+          "echeance_suivante",
+          "total",
+          "total_terme",
+          "economie",
+          "interets_economises"
+        ],
+        "properties": {
+          "mois": {
+            "type": "integer",
+            "example": 120
+          },
+          "montant": {
+            "type": "number",
+            "description": "Capital rembourse par anticipation.",
+            "example": 50000.0
+          },
+          "indemnite": {
+            "type": "number",
+            "description": "Indemnite due, calculee sur le capital rembourse et non sur le solde.",
+            "example": 500.0
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "duree_reduite",
+              "echeance_reduite"
+            ],
+            "example": "duree_reduite"
+          },
+          "duree": {
+            "type": "integer",
+            "description": "Nombre d'echeances apres l'operation : reduit en duree_reduite, inchange en echeance_reduite.",
+            "example": 195
+          },
+          "echeance_suivante": {
+            "type": "number",
+            "description": "Ce qui sera du le mois suivant l'operation, assurance comprise. Nulle quand l'operation solde le pret.",
+            "example": 2169.558
+          },
+          "total": {
+            "type": "number",
+            "description": "Total verse sur la trajectoire modifiee : echeances dues, capital rembourse et indemnite.",
+            "example": 472019.531
+          },
+          "total_terme": {
+            "type": "number",
+            "example": 520693.976
+          },
+          "economie": {
+            "type": "number",
+            "description": "Nulle si l'indemnite rend l'operation perdante ; jamais negative.",
+            "example": 48674.445
+          },
+          "interets_economises": {
+            "type": "number",
+            "example": 49174.445
           }
         }
       }

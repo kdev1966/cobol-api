@@ -50,7 +50,7 @@
       *> majorer d'un cinquieme et statuer. Un TEM nul signifie qu'aucune
       *> verification n'est demandee.
       *>
-      *> Entree : une ligne de 77 caracteres sur stdin
+      *> Entree : une ligne de 92 caracteres sur stdin
       *>            capital         9(11)V999  positions  1-14
       *>            taux annuel     9(2)V9(6)  positions 15-22
       *>            duree mois      9(4)       positions 23-26
@@ -64,18 +64,36 @@
       *>            mois anticipe   9(4)       positions 66-69
       *>                            (zero = aucun remboursement anticipe)
       *>            taux indemnite  9(2)V9(4)  positions 70-75
-      *>            methode         X          position     76
-      *>            assiette assur. X          position     77
+      *>            montant anticipe 9(11)V999 positions 76-89
+      *>                            (zero = solde total, non partiel)
+      *>            methode         X          position     90
+      *>            assiette assur. X          position     91
+      *>            mode anticipe   X          position     92
+      *>                            (T total, D duree reduite,
+      *>                             M echeance reduite)
       *>
       *> Sortie : enregistrements a largeur fixe, un par ligne.
       *>          "R" recapitulatif : echeances 9(4), premiere et derniere
-      *>              echeance 9(11)V99, total interets, total assurance
-      *>              9(13)V99, total frais 9(11)V99, total du et cout du
-      *>              credit 9(13)V99, taeg 9(2)V9(4), taux d'usure
+      *>              echeance 9(11)V999, total interets, total assurance
+      *>              9(13)V999, total frais 9(11)V999, total du et cout du
+      *>              credit 9(13)V999, taeg 9(2)V9(4), taux d'usure
       *>              9(2)V9(4), conformite X, marge S9(2)V9(4) a signe
-      *>              separe                                  -> 124 car.
+      *>              separe                                  -> 129 car.
       *>          "E" echeance      : numero 9(4), echeance, interets,
-      *>              capital, assurance, du, solde 9(11)V99   -> 83 car.
+      *>              capital, assurance, du, solde 9(11)V999  -> 89 car.
+      *>          "A" solde total   : mois 9(4), solde restant, indemnite
+      *>              9(11)V999, total anticipe, total au terme, economie,
+      *>              interets economises 9(13)V999            -> 97 car.
+      *>              (emis seulement en mode T avec un mois non nul)
+      *>          "P" remb. partiel : mois 9(4), montant, indemnite
+      *>              9(11)V999, mode X, duree 9(4), echeance suivante
+      *>              9(11)V999, total, total au terme, economie, interets
+      *>              economises 9(13)V999                    -> 116 car.
+      *>              (emis seulement en mode D ou M)
+      *>
+      *>          L'echeancier rendu reste celui du contrat, quel que soit le
+      *>          remboursement anticipe simule : celui-ci est une decision de
+      *>          l'emprunteur, pas une clause du pret.
       *>
       *>          JSON GENERATE n'est deliberement pas utilise : le paquet
       *>          GnuCOBOL des distributions est construit sans bibliotheque
@@ -98,11 +116,12 @@
        DATA DIVISION.
        WORKING-STORAGE SECTION.
 
-       01 WS-ENTREE             PIC X(77) VALUE SPACES.
+       01 WS-ENTREE             PIC X(92) VALUE SPACES.
        01 WS-ENTREE-CHAMPS REDEFINES WS-ENTREE.
-          05 WS-E-CHIFFRES      PIC X(75).
+          05 WS-E-CHIFFRES      PIC X(89).
           05 WS-E-METHODE       PIC X.
           05 WS-E-ASSIETTE      PIC X.
+          05 WS-E-MODE-ANTIC    PIC X.
        01 WS-E-DETAIL REDEFINES WS-ENTREE.
           05 WS-E-CAPITAL       PIC 9(11)V999.
           05 WS-E-TAUX          PIC 9(2)V9(6).
@@ -114,7 +133,10 @@
           05 WS-E-DIFFERE       PIC 9(3).
           05 WS-E-MOIS-ANTICIPE PIC 9(4).
           05 WS-E-TAUX-INDEM    PIC 9(2)V9(4).
-          05 FILLER             PIC X(2).
+      *> Capital rembourse par anticipation en cours de pret, nul quand
+      *> l'operation est un solde total.
+          05 WS-E-MONTANT-ANTIC PIC 9(11)V999.
+          05 FILLER             PIC X(3).
 
        78 METHODE-ANNUITE       VALUE "A".
        78 METHODE-CAPITAL       VALUE "C".
@@ -125,6 +147,12 @@
        78 CONFORME-OUI          VALUE "O".
        78 CONFORME-NON          VALUE "N".
        78 CONFORME-SANS-OBJET   VALUE "-".
+      *> Suite donnee a un remboursement anticipe : solder la totalite du
+      *> capital, ou en rembourser une part et raccourcir la duree, ou en
+      *> rembourser une part et alleger l'echeance.
+       78 MODE-TOTAL            VALUE "T".
+       78 MODE-DUREE            VALUE "D".
+       78 MODE-MENSUALITE       VALUE "M".
 
        01 WS-CONFORME           PIC X      VALUE "-".
        01 WS-MARGE              PIC S9(2)V99   VALUE 0.
@@ -169,6 +197,39 @@
           05 WS-A-TOTAL-TERME   PIC 9(13)V999  VALUE 0.
           05 WS-A-ECONOMIE      PIC 9(13)V999  VALUE 0.
           05 WS-A-INT-ECONOMIE  PIC 9(13)V999  VALUE 0.
+      *> Trajectoire contractuelle, conservee pour la comparer a celle qui
+      *> suit un remboursement partiel.
+       01 WS-TOTAL-TERME-REF    PIC 9(13)V999  VALUE 0.
+       01 WS-INT-TERME-REF      PIC 9(13)V999  VALUE 0.
+       01 WS-TOTAL-PARTIEL      PIC 9(13)V999  VALUE 0.
+       01 WS-INDEM-PARTIELLE    PIC 9(11)V999  VALUE 0.
+      *> Duree reellement parcourue : elle raccourcit quand un remboursement
+      *> partiel est impute en duree reduite.
+       01 WS-DUREE-EFFECTIVE    PIC 9(4)       VALUE 0.
+       01 WS-MOIS-RESTANTS      PIC 9(4)       VALUE 0.
+      *> Echeance et amortissement d'origine, restaures a chaque passe : le
+      *> mode « mensualite reduite » les modifie en cours de deroulement.
+       01 WS-MENSUALITE-INIT    PIC 9(11)V999  VALUE 0.
+       01 WS-AMORT-FIXE-INIT    PIC 9(11)V999  VALUE 0.
+       01 WS-PARTIEL-ACTIF      PIC X          VALUE "N".
+      *> Ce qui sera du le mois suivant l'operation, assurance comprise.
+      *> Toutes methodes confondues, c'est la reponse a « je paie combien
+      *> desormais ». Nul quand l'operation solde le pret.
+       01 WS-ECHEANCE-SUIVANTE  PIC 9(11)V999  VALUE 0.
+
+       01 WS-PARTIEL.
+          05 FILLER             PIC X          VALUE "P".
+          05 WS-P-MOIS          PIC 9(4)       VALUE 0.
+          05 WS-P-MONTANT       PIC 9(11)V999  VALUE 0.
+          05 WS-P-INDEMNITE     PIC 9(11)V999  VALUE 0.
+          05 WS-P-MODE          PIC X          VALUE "T".
+          05 WS-P-DUREE         PIC 9(4)       VALUE 0.
+          05 WS-P-ECHEANCE-SUIV PIC 9(11)V999  VALUE 0.
+          05 WS-P-TOTAL         PIC 9(13)V999  VALUE 0.
+          05 WS-P-TOTAL-TERME   PIC 9(13)V999  VALUE 0.
+          05 WS-P-ECONOMIE      PIC 9(13)V999  VALUE 0.
+          05 WS-P-INT-ECONOMIE  PIC 9(13)V999  VALUE 0.
+
        01 WS-COUT-CREDIT        PIC 9(13)V999  VALUE 0.
 
       *> Duree maximale acceptee, qui dimensionne la table des versements
@@ -234,10 +295,17 @@
            PERFORM VERIFIER-TAUX-EXCESSIF
            PERFORM ECRIRE-RECAPITULATIF
            IF WS-E-MOIS-ANTICIPE NOT = 0
-               PERFORM CALCULER-ANTICIPE
-               PERFORM ECRIRE-ANTICIPE
+               IF WS-E-MODE-ANTIC = MODE-TOTAL
+                   PERFORM CALCULER-ANTICIPE
+                   PERFORM ECRIRE-ANTICIPE
+               ELSE
+                   PERFORM SIMULER-PARTIEL
+                   PERFORM ECRIRE-PARTIEL
+               END-IF
            END-IF
 
+      *> L'echeancier rendu reste celui du contrat : un remboursement
+      *> anticipe est une decision de l'emprunteur, pas une clause.
            MOVE "O" TO WS-EMETTRE
            PERFORM DEROULER-ECHEANCIER
 
@@ -247,7 +315,7 @@
            ACCEPT WS-ENTREE
 
            IF WS-E-CHIFFRES IS NOT NUMERIC
-               DISPLAY "entree malformee : 55 chiffres puis deux lettres"
+               DISPLAY "entree malformee : 89 chiffres puis trois lettres"
                    UPON SYSERR
                MOVE 2 TO RETURN-CODE
                STOP RUN
@@ -284,6 +352,53 @@
                    UPON SYSERR
                MOVE 5 TO RETURN-CODE
                STOP RUN
+           END-IF
+
+           IF WS-E-MODE-ANTIC NOT = MODE-TOTAL
+              AND WS-E-MODE-ANTIC NOT = MODE-DUREE
+              AND WS-E-MODE-ANTIC NOT = MODE-MENSUALITE
+               DISPLAY "mode de remboursement anticipe inconnu : "
+                   WS-E-MODE-ANTIC UPON SYSERR
+               MOVE 6 TO RETURN-CODE
+               STOP RUN
+           END-IF
+
+      *> Solder la totalite ne laisse rien a rembourser partiellement, et
+      *> reciproquement : les deux operations s'excluent.
+           IF WS-E-MODE-ANTIC = MODE-TOTAL
+              AND WS-E-MONTANT-ANTIC NOT = 0
+               DISPLAY "un solde total ne prend pas de montant" UPON SYSERR
+               MOVE 6 TO RETURN-CODE
+               STOP RUN
+           END-IF
+
+           IF WS-E-MODE-ANTIC NOT = MODE-TOTAL
+               IF WS-E-MONTANT-ANTIC = 0
+                   DISPLAY "un remboursement partiel exige un montant"
+                       UPON SYSERR
+                   MOVE 6 TO RETURN-CODE
+                   STOP RUN
+               END-IF
+
+      *> Il doit rester une echeance apres l'operation pour que raccourcir
+      *> la duree ou alleger l'echeance ait un sens.
+               IF WS-E-MOIS-ANTICIPE = 0
+                  OR WS-E-MOIS-ANTICIPE >= WS-E-DUREE
+                   DISPLAY "le remboursement partiel doit laisser au moins "
+                       "une echeance" UPON SYSERR
+                   MOVE 6 TO RETURN-CODE
+                   STOP RUN
+               END-IF
+
+      *> Sans amortissement avant le terme, il n'y a pas de duree a
+      *> raccourcir : le capital est du en une fois, a la fin.
+               IF WS-E-MODE-ANTIC = MODE-DUREE
+                  AND WS-E-METHODE = METHODE-IN-FINE
+                   DISPLAY "la duree reduite est sans objet in fine"
+                       UPON SYSERR
+                   MOVE 6 TO RETURN-CODE
+                   STOP RUN
+               END-IF
            END-IF
 
            IF WS-E-METHODE NOT = METHODE-ANNUITE
@@ -346,16 +461,25 @@
                WHEN METHODE-IN-FINE
       *> Aucun capital n'est rembourse avant la derniere echeance.
                    MOVE 0 TO WS-AMORT-FIXE
-           END-EVALUATE.
+           END-EVALUATE
+
+      *> Le mode « mensualite reduite » recalcule ces deux valeurs en cours
+      *> de deroulement : chaque passe repart de celles du contrat.
+           MOVE WS-MENSUALITE TO WS-MENSUALITE-INIT
+           MOVE WS-AMORT-FIXE TO WS-AMORT-FIXE-INIT.
 
        DEROULER-ECHEANCIER.
            MOVE WS-E-CAPITAL TO WS-SOLDE
            MOVE 0 TO WS-CUM-INTERET
            MOVE 0 TO WS-CUM-ASSURANCE
            MOVE 0 TO WS-CUM-DU
+           MOVE WS-E-DUREE TO WS-DUREE-EFFECTIVE
+           MOVE 0 TO WS-ECHEANCE-SUIVANTE
+           MOVE WS-MENSUALITE-INIT TO WS-MENSUALITE
+           MOVE WS-AMORT-FIXE-INIT TO WS-AMORT-FIXE
 
            PERFORM VARYING WS-I FROM 1 BY 1
-               UNTIL WS-I > WS-E-DUREE
+               UNTIL WS-I > WS-DUREE-EFFECTIVE
 
                COMPUTE WS-INTERET ROUNDED =
                    WS-SOLDE * WS-TAUX-MENSUEL
@@ -377,7 +501,7 @@
       *> dus : le capital reste intact.
                    MOVE 0 TO WS-PART-CAPITAL
                ELSE
-               IF WS-I = WS-E-DUREE
+               IF WS-I = WS-DUREE-EFFECTIVE
       *> Quelle que soit la methode, la derniere echeance solde le
       *> capital restant : c'est elle qui absorbe le residu accumule
       *> par les arrondis mensuels.
@@ -392,6 +516,15 @@
                        WHEN METHODE-IN-FINE
                            MOVE 0 TO WS-PART-CAPITAL
                    END-EVALUATE
+
+      *> En duree reduite, l'echeance dont la part de capital couvre le
+      *> solde est la derniere : elle l'absorbe et clot le pret.
+                   IF WS-PARTIEL-ACTIF = "O"
+                      AND WS-E-MODE-ANTIC = MODE-DUREE
+                      AND WS-PART-CAPITAL >= WS-SOLDE
+                       MOVE WS-SOLDE TO WS-PART-CAPITAL
+                       MOVE WS-I TO WS-DUREE-EFFECTIVE
+                   END-IF
                END-IF
                END-IF
 
@@ -405,6 +538,11 @@
 
                MOVE WS-DU TO WS-VERSEMENT(WS-I)
 
+               IF WS-PARTIEL-ACTIF = "O"
+                   AND WS-I = WS-E-MOIS-ANTICIPE + 1
+                   MOVE WS-DU TO WS-ECHEANCE-SUIVANTE
+               END-IF
+
       *> Etat a l'echeance du remboursement anticipe : ce qui a ete verse
       *> jusque-la, et ce qui reste a solder.
                IF WS-E-MOIS-ANTICIPE NOT = 0
@@ -414,10 +552,25 @@
                    MOVE WS-SOLDE       TO WS-SOLDE-ANTICIPE
                END-IF
 
+      *> Le remboursement partiel s'impute apres l'echeance du mois, sur le
+      *> capital restant. Il ne porte pas d'interet : il est verse le jour
+      *> ou l'echeance l'est.
+               IF WS-PARTIEL-ACTIF = "O"
+                   AND WS-I = WS-E-MOIS-ANTICIPE
+                   SUBTRACT WS-E-MONTANT-ANTIC FROM WS-SOLDE
+                   IF WS-SOLDE = 0
+                       MOVE WS-I TO WS-DUREE-EFFECTIVE
+                   ELSE
+                       IF WS-E-MODE-ANTIC = MODE-MENSUALITE
+                           PERFORM RECALCULER-ECHEANCE
+                       END-IF
+                   END-IF
+               END-IF
+
                IF WS-I = 1
                    MOVE WS-DU TO WS-PREMIERE
                END-IF
-               IF WS-I = WS-E-DUREE
+               IF WS-I = WS-DUREE-EFFECTIVE
                    MOVE WS-DU TO WS-DERNIERE
                END-IF
 
@@ -516,6 +669,94 @@
 
            COMPUTE WS-INT-ECONOMISES =
                WS-CUM-INTERET - WS-CUM-INT-ANTICIPE.
+
+      *> Repartir l'echeance sur les mois restants, le capital ayant baisse.
+      *> L'amortissement ne commence qu'apres la franchise : quand le
+      *> remboursement tombe pendant celle-ci, les mois a repartir se
+      *> comptent depuis sa sortie.
+       RECALCULER-ECHEANCE.
+           IF WS-E-MOIS-ANTICIPE > WS-E-DIFFERE
+               COMPUTE WS-MOIS-RESTANTS =
+                   WS-E-DUREE - WS-E-MOIS-ANTICIPE
+           ELSE
+               COMPUTE WS-MOIS-RESTANTS = WS-E-DUREE - WS-E-DIFFERE
+           END-IF
+
+           EVALUATE WS-E-METHODE
+               WHEN METHODE-ANNUITE
+                   IF WS-TAUX-MENSUEL = 0
+                       COMPUTE WS-MENSUALITE ROUNDED =
+                           WS-SOLDE / WS-MOIS-RESTANTS
+                   ELSE
+                       COMPUTE WS-FACTEUR =
+                           (1 + WS-TAUX-MENSUEL) ** WS-MOIS-RESTANTS
+                       COMPUTE WS-MENSUALITE ROUNDED =
+                           WS-SOLDE * WS-TAUX-MENSUEL
+                           / (1 - (1 / WS-FACTEUR))
+                   END-IF
+
+               WHEN METHODE-CAPITAL
+                   COMPUTE WS-AMORT-FIXE ROUNDED =
+                       WS-SOLDE / WS-MOIS-RESTANTS
+
+      *> In fine, l'echeance ne porte que les interets : elle suit d'elle
+      *> meme le capital restant, sans rien a repartir.
+               WHEN METHODE-IN-FINE
+                   CONTINUE
+           END-EVALUATE.
+
+      *> Compare la trajectoire modifiee a la trajectoire contractuelle.
+      *> La passe contractuelle vient de s'achever : ses totaux sont mis de
+      *> cote avant que la seconde passe ne les ecrase.
+       SIMULER-PARTIEL.
+           MOVE WS-CUM-DU      TO WS-TOTAL-TERME-REF
+           MOVE WS-CUM-INTERET TO WS-INT-TERME-REF
+
+           IF WS-E-MONTANT-ANTIC > WS-SOLDE-ANTICIPE
+               DISPLAY "le montant rembourse depasse le capital restant"
+                   UPON SYSERR
+               MOVE 6 TO RETURN-CODE
+               STOP RUN
+           END-IF
+
+           COMPUTE WS-INDEM-PARTIELLE ROUNDED =
+               WS-E-MONTANT-ANTIC * WS-E-TAUX-INDEM / 100
+
+           MOVE "O" TO WS-PARTIEL-ACTIF
+           PERFORM DEROULER-ECHEANCIER
+           MOVE "N" TO WS-PARTIEL-ACTIF
+
+      *> Ce que coute la trajectoire modifiee : les echeances effectivement
+      *> versees, le capital rembourse par anticipation et son indemnite.
+           COMPUTE WS-TOTAL-PARTIEL = WS-CUM-DU
+               + WS-E-MONTANT-ANTIC + WS-INDEM-PARTIELLE
+
+      *> Une indemnite assez forte peut annuler le gain : l'economie est
+      *> alors nulle, jamais negative.
+           IF WS-TOTAL-TERME-REF > WS-TOTAL-PARTIEL
+               COMPUTE WS-ECONOMIE =
+                   WS-TOTAL-TERME-REF - WS-TOTAL-PARTIEL
+           ELSE
+               MOVE 0 TO WS-ECONOMIE
+           END-IF
+
+           COMPUTE WS-INT-ECONOMISES =
+               WS-INT-TERME-REF - WS-CUM-INTERET.
+
+       ECRIRE-PARTIEL.
+           MOVE WS-E-MOIS-ANTICIPE TO WS-P-MOIS
+           MOVE WS-E-MONTANT-ANTIC TO WS-P-MONTANT
+           MOVE WS-INDEM-PARTIELLE TO WS-P-INDEMNITE
+           MOVE WS-E-MODE-ANTIC    TO WS-P-MODE
+           MOVE WS-DUREE-EFFECTIVE TO WS-P-DUREE
+      *> Echeance qui suit l'operation : allegee en mode « mensualite
+      *> reduite », inchangee quand c'est la duree qui raccourcit.
+           MOVE WS-ECHEANCE-SUIVANTE TO WS-P-ECHEANCE-SUIV
+           MOVE WS-TOTAL-PARTIEL   TO WS-P-TOTAL
+           MOVE WS-TOTAL-TERME-REF TO WS-P-TOTAL-TERME
+           MOVE WS-ECONOMIE        TO WS-P-ECONOMIE
+           MOVE WS-INT-ECONOMISES  TO WS-P-INT-ECONOMIE
+           DISPLAY WS-PARTIEL.
 
        ECRIRE-ANTICIPE.
            MOVE WS-E-MOIS-ANTICIPE TO WS-A-MOIS

@@ -58,6 +58,15 @@ type Demande struct {
 	TauxIndemniteDixMillieme int64 `json:"-"`
 	// TauxIndemnite est absent quand aucun remboursement anticipe n'est simule.
 	TauxIndemnite *string `json:"taux_indemnite,omitempty"`
+	// MontantAnticipeMillimes est le capital rembourse par anticipation en
+	// cours de pret. Zero quand l'operation solde la totalite du capital.
+	MontantAnticipeMillimes int64 `json:"-"`
+	// CodeModeAnticipe est la lettre attendue par le programme COBOL : la
+	// totalite du capital, la duree reduite, ou l'echeance allegee.
+	CodeModeAnticipe byte `json:"-"`
+	// MontantAnticipe et ModeAnticipe sont absents hors remboursement partiel.
+	MontantAnticipe *string `json:"montant_remboursement_anticipe,omitempty"`
+	ModeAnticipe    *string `json:"mode_remboursement_anticipe,omitempty"`
 	// DiffereMois est le nombre d'echeances en franchise partielle : seuls
 	// les interets et l'assurance y sont dus.
 	DiffereMois int `json:"differe_mois"`
@@ -84,9 +93,11 @@ const (
 	tagRecap     = 'R'
 	tagEcheance  = 'E'
 	tagAnticipe  = 'A'
+	tagPartiel   = 'P'
 	longRecap    = 129
 	longEcheance = 89
 	longAnticipe = 97
+	longPartiel  = 116
 )
 
 // Recapitulatif est la premiere ligne rendue par le programme COBOL.
@@ -152,15 +163,70 @@ type Anticipe struct {
 	InteretsEconomises json.Number `json:"interets_economises"`
 }
 
+// Partiel compare un remboursement anticipe partiel a la poursuite du
+// contrat jusqu'au terme. Il n'est present que si un tel remboursement a ete
+// demande, et exclut alors Anticipe : solder la totalite du capital et n'en
+// rembourser qu'une part sont deux operations distinctes.
+//
+// L'echeancier rendu reste celui du contrat. Un remboursement anticipe est
+// une decision de l'emprunteur, pas une clause : le service la simule sans
+// reecrire le tableau d'amortissement contractuel.
+type Partiel struct {
+	Mois int `json:"mois"`
+	// Montant est le capital rembourse, Indemnite ce qu'il en coute.
+	Montant   json.Number `json:"montant"`
+	Indemnite json.Number `json:"indemnite"`
+	// Mode dit ce qui absorbe le remboursement : la duree ou l'echeance.
+	Mode string `json:"mode"`
+	// Duree est le nombre d'echeances apres l'operation : reduit en duree
+	// reduite, inchange quand c'est l'echeance qui s'allege.
+	Duree int `json:"duree"`
+	// EcheanceSuivante est ce qui sera du le mois suivant l'operation,
+	// assurance comprise. Nulle quand l'operation solde le pret.
+	EcheanceSuivante json.Number `json:"echeance_suivante"`
+	// Total est ce que l'emprunteur aura verse en tout sur la trajectoire
+	// modifiee : les echeances effectivement dues, le capital rembourse par
+	// anticipation et son indemnite.
+	Total      json.Number `json:"total"`
+	TotalTerme json.Number `json:"total_terme"`
+	// Economie est nulle si l'indemnite rend l'operation perdante.
+	Economie           json.Number `json:"economie"`
+	InteretsEconomises json.Number `json:"interets_economises"`
+}
+
 // Echeancier est le resultat complet d'un calcul.
 type Echeancier struct {
 	Recapitulatif Recapitulatif `json:"recapitulatif"`
 	Echeancier    []Echeance    `json:"echeancier"`
 	Anticipe      *Anticipe     `json:"anticipe,omitempty"`
+	Partiel       *Partiel      `json:"remboursement_partiel,omitempty"`
 }
 
 // ErrProgramme signale un echec du programme COBOL lui-meme.
 var ErrProgramme = errors.New("le programme COBOL a echoue")
+
+// ErrDemandeRefusee signale une demande que le programme COBOL rejette comme
+// invalide. Le service valide tout ce qu'il peut avant d'appeler le binaire,
+// mais certaines regles ne se verifient qu'une fois l'echeancier deroule :
+// rembourser par anticipation plus que le capital restant du, par exemple.
+// C'est une erreur de saisie, pas une panne.
+var ErrDemandeRefusee = errors.New("demande refusee par le programme COBOL")
+
+// codeRefus est le RETURN-CODE dont le programme COBOL se sert pour distinguer
+// un refus de saisie d'un echec technique.
+const codeRefus = 6
+
+// ErreurRefus porte le motif du refus, tel que le programme COBOL l'a ecrit
+// sur sa sortie d'erreur. Le motif est un message fixe du programme : il peut
+// etre rendu au client, a la difference du detail d'un echec technique qui
+// porte des chemins absolus.
+type ErreurRefus struct{ Motif string }
+
+func (e *ErreurRefus) Error() string {
+	return ErrDemandeRefusee.Error() + " : " + e.Motif
+}
+
+func (e *ErreurRefus) Unwrap() error { return ErrDemandeRefusee }
 
 // ErrDelaiDepasse signale que le programme n'a pas rendu la main a temps.
 var ErrDelaiDepasse = errors.New("le programme COBOL a depasse son delai")
@@ -193,18 +259,20 @@ func NewMoteur(chemin, cheminCapacite string, delai time.Duration) *Moteur {
 	return &Moteur{Chemin: chemin, CheminCapacite: cheminCapacite, Delai: delai}
 }
 
-// ligneEntree rend les 77 caracteres attendus par le programme : capital
+// ligneEntree rend les 92 caracteres attendus par le programme : capital
 // 9(11)V999, taux 9(2)V9(6), duree 9(4), frais de dossier et de garantie
 // 9(9)V999, taux d'assurance 9(2)V9(6), taux effectif moyen 9(2)V99, differe
-// 9(3), mois du remboursement anticipe 9(4), taux d'indemnite 9(2)V9(4), puis
-// les lettres de la methode et de l'assiette d'assurance.
+// 9(3), mois du remboursement anticipe 9(4), taux d'indemnite 9(2)V9(4),
+// montant rembourse par anticipation 9(11)V999, puis les lettres de la
+// methode, de l'assiette d'assurance et du mode de remboursement anticipe.
 func ligneEntree(d Demande) string {
-	return fmt.Sprintf("%014d%08d%04d%012d%012d%08d%04d%03d%04d%06d%c%c\n",
+	return fmt.Sprintf("%014d%08d%04d%012d%012d%08d%04d%03d%04d%06d%014d%c%c%c\n",
 		d.CapitalMillimes, d.TauxMillioniemes, d.Mois,
 		d.FraisDossierMillimes, d.FraisGarantieMillimes,
 		d.TauxAssuranceMillion, d.TemCentiemes, d.DiffereMois,
 		d.MoisAnticipe, d.TauxIndemniteDixMillieme,
-		d.CodeMethode, d.CodeAssiette)
+		d.MontantAnticipeMillimes,
+		d.CodeMethode, d.CodeAssiette, d.CodeModeAnticipe)
 }
 
 // Calculer produit l'echeancier de la demande.
@@ -229,6 +297,14 @@ func (m *Moteur) Calculer(ctx context.Context, d Demande) (*Echeancier, error) {
 		detail := strings.TrimSpace(erreurs.String())
 		if detail == "" {
 			detail = err.Error()
+		}
+		var sortieErr *exec.ExitError
+		if errors.As(err, &sortieErr) && sortieErr.ExitCode() == codeRefus {
+			motif := strings.TrimSpace(erreurs.String())
+			if motif == "" {
+				motif = "demande refusee par le moteur de calcul"
+			}
+			return nil, &ErreurRefus{Motif: motif}
 		}
 		return nil, fmt.Errorf("%w : %s", ErrProgramme, detail)
 	}
@@ -299,6 +375,13 @@ func lireSortie(r *bytes.Buffer) (*Echeancier, error) {
 				return nil, err
 			}
 			res.Echeancier = append(res.Echeancier, e)
+
+		case len(ligne) == longPartiel && ligne[0] == tagPartiel:
+			var pa Partiel
+			if err := lirePartiel(ligne, &pa); err != nil {
+				return nil, err
+			}
+			res.Partiel = &pa
 
 		case len(ligne) == longAnticipe && ligne[0] == tagAnticipe:
 			var a Anticipe
@@ -425,6 +508,42 @@ func lireAnticipe(ligne string, a *Anticipe) error {
 	for _, c := range champs {
 		if *c.cible, err = montant(ligne[c.debut:c.fin]); err != nil {
 			return fmt.Errorf("remboursement anticipe illisible : %w", err)
+		}
+	}
+	return nil
+}
+
+func lirePartiel(ligne string, p *Partiel) error {
+	var err error
+	if p.Mois, err = entier(ligne[1:5]); err != nil {
+		return fmt.Errorf("remboursement partiel illisible : %w", err)
+	}
+	if p.Duree, err = entier(ligne[34:38]); err != nil {
+		return fmt.Errorf("remboursement partiel illisible : %w", err)
+	}
+	mode, ok := libellesMode[ligne[33]]
+	if !ok {
+		return fmt.Errorf("remboursement partiel illisible : mode %q inattendu",
+			ligne[33])
+	}
+	p.Mode = mode
+
+	champs := []struct {
+		cible *json.Number
+		debut int
+		fin   int
+	}{
+		{&p.Montant, 5, 19},
+		{&p.Indemnite, 19, 33},
+		{&p.EcheanceSuivante, 38, 52},
+		{&p.Total, 52, 68},
+		{&p.TotalTerme, 68, 84},
+		{&p.Economie, 84, 100},
+		{&p.InteretsEconomises, 100, 116},
+	}
+	for _, c := range champs {
+		if *c.cible, err = montant(ligne[c.debut:c.fin]); err != nil {
+			return fmt.Errorf("remboursement partiel illisible : %w", err)
 		}
 	}
 	return nil
