@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -13,11 +14,14 @@ import (
 // meme identifiant.
 func agentDeTest(t *testing.T, a *Agents) (string, string, *Agent) {
 	t.Helper()
-	identifiant := "agent-" + time.Now().Format("20060102150405.000000000")
+	marque := time.Now().Format("20060102150405.000000000")
+	identifiant := "agent-" + marque
 	motDePasse := "un mot de passe assez long"
 
+	// Une agence propre a chaque agent de test : la visibilite des dossiers
+	// est par agence, deux tests partageant la meme se verraient mutuellement.
 	ag, err := a.Creer(context.Background(), identifiant, motDePasse,
-		"Agent de test", "Tunis Centre")
+		"Agent de test", "Agence "+marque)
 	if err != nil {
 		t.Fatalf("Creer : %v", err)
 	}
@@ -248,5 +252,65 @@ func TestAgentDeSessionRefuseUnJetonInvente(t *testing.T) {
 	if _, err := agents.AgentDeSession(context.Background(),
 		"jeton-entierement-invente"); !errors.Is(err, ErrSessionInconnue) {
 		t.Errorf("erreur %v, attendu ErrSessionInconnue", err)
+	}
+}
+
+// Le calcul argon2id reserve 64 Mio a chaque appel. Sans borne, une rafale de
+// connexions les cumule et fait passer le service de quelques dizaines de
+// megaoctets a plus d'un gigaoctet. Ce test verifie que la borne tient sous
+// une rafale bien plus large qu'elle.
+func TestLesVerificationsSimultaneesSontBornees(t *testing.T) {
+	empreinte, err := HacherMotDePasse("un mot de passe quelconque")
+	if err != nil {
+		t.Fatalf("HacherMotDePasse : %v", err)
+	}
+
+	var maximum int64
+	var mu sync.Mutex
+	var groupe sync.WaitGroup
+
+	// Un observateur echantillonne l'occupation du canal de jetons pendant
+	// la rafale : sa longueur est le nombre de calculs en cours.
+	arret := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-arret:
+				return
+			default:
+				mu.Lock()
+				if n := int64(len(jetons)); n > maximum {
+					maximum = n
+				}
+				mu.Unlock()
+			}
+		}
+	}()
+
+	for i := 0; i < 40; i++ {
+		groupe.Add(1)
+		go func() {
+			defer groupe.Done()
+			if _, err := VerifierMotDePasse("un mot de passe quelconque",
+				empreinte); err != nil {
+				t.Errorf("VerifierMotDePasse : %v", err)
+			}
+		}()
+	}
+	groupe.Wait()
+	close(arret)
+
+	mu.Lock()
+	vu := maximum
+	mu.Unlock()
+
+	if vu > VerificationsSimultanees {
+		t.Errorf("%d calculs simultanes observes, borne a %d",
+			vu, VerificationsSimultanees)
+	}
+	// La borne doit avoir mordu : quarante appels d'un coup contre quatre
+	// places, sans quoi le test ne prouverait rien.
+	if vu < 2 {
+		t.Errorf("occupation maximale observee %d : la rafale n'a pas eu lieu", vu)
 	}
 }

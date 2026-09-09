@@ -822,7 +822,7 @@
     "/v1/dossiers": {
       "get": {
         "summary": "Lister les dossiers de l'agence",
-        "description": "Un agent voit les dossiers de son agence et n'en voit aucun autre.",
+        "description": "Un agent voit les dossiers de son agence et n'en voit aucun autre. La pagination se fait par curseur et non par numero de page : le cout d'un OFFSET croit avec la profondeur, celui d'un curseur non. « total » et « repartition » n'accompagnent que la premiere page, leur calcul couterait autant a chaque page suivante pour le meme chiffre.",
         "security": [
           {
             "SessionAgent": []
@@ -842,6 +842,25 @@
                 "refuse",
                 "annule"
               ]
+            }
+          },
+          {
+            "name": "recherche",
+            "in": "query",
+            "required": false,
+            "description": "Prefixe de reference, sans egard a la casse. Les caracteres generiques de LIKE y sont litteraux : un souligne vaut un souligne.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "PRT-2026"
+          },
+          {
+            "name": "curseur",
+            "in": "query",
+            "required": false,
+            "description": "Borne opaque rendue par curseur_suivant. Absente pour la premiere page.",
+            "schema": {
+              "type": "string"
             }
           },
           {

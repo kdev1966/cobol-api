@@ -168,10 +168,32 @@ export const api = {
 
   moi: () => appeler<{ agent: Agent }>('/v1/auth/moi'),
 
-  listerDossiers: (statut?: string) =>
-    appeler<{ dossiers: Dossier[]; total: number }>(
-      '/v1/dossiers' + (statut ? `?statut=${encodeURIComponent(statut)}` : ''),
-    ),
+  // « total » est le nombre de dossiers que le filtre designe, « rendus »
+  // celui des lignes de la page. Le curseur est opaque : il vient du service
+  // et lui est rendu tel quel.
+  listerDossiers: (options: {
+    statut?: string
+    recherche?: string
+    curseur?: string
+    limite?: number
+  } = {}) => {
+    const p = new URLSearchParams()
+    if (options.statut) p.set('statut', options.statut)
+    if (options.recherche) p.set('recherche', options.recherche)
+    if (options.curseur) p.set('curseur', options.curseur)
+    if (options.limite) p.set('limite', String(options.limite))
+    const q = p.toString()
+    return appeler<{
+      dossiers: Dossier[]
+      rendus: number
+      // total et repartition n'accompagnent que la premiere page : leur
+      // calcul couterait autant a chaque page suivante pour le meme chiffre.
+      total?: number
+      repartition?: Record<Statut, number>
+      curseur_suivant?: string
+      recherche?: string
+    }>('/v1/dossiers' + (q ? `?${q}` : ''))
+  },
 
   lireDossier: (id: number) =>
     appeler<{ dossier: Dossier; historique: Evenement[] }>(
@@ -224,6 +246,12 @@ export function pourcent(valeur: number | null | undefined): string {
       maximumFractionDigits: 2,
     }) + ' %'
   )
+}
+
+// Les comptes de dossiers sont des entiers : un separateur de milliers suffit,
+// sans decimale.
+export function entier(valeur: number): string {
+  return valeur.toLocaleString('fr-TN', { maximumFractionDigits: 0 })
 }
 
 export function date(iso: string): string {

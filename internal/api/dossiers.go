@@ -90,6 +90,10 @@ func (s *Serveur) repondreErreurDossier(w http.ResponseWriter, r *http.Request, 
 			"Le dossier n'est plus modifiable : seul un brouillon l'est")
 	case errors.Is(err, db.ErrTransitionRefusee):
 		ecrireErreur(w, http.StatusConflict, err.Error())
+	case errors.Is(err, db.ErrCurseurInvalide):
+		// Le curseur vient du service : un curseur illisible est une saisie
+		// du client, non une panne.
+		ecrireErreur(w, http.StatusBadRequest, "Curseur de pagination invalide")
 	default:
 		slog.Error("dossier", "id", IDRequete(r.Context()), "erreur", err)
 		ecrireErreur(w, http.StatusInternalServerError, "Erreur interne")
@@ -138,13 +142,70 @@ func (s *Serveur) listerDossiers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limite, _ := strconv.Atoi(q.Get("limite"))
-	liste, err := s.dossiers.Lister(r.Context(), agent, statut, limite)
+	page, err := s.dossiers.Lister(r.Context(), agent, db.Filtre{
+		Statut:    statut,
+		Recherche: q.Get("recherche"),
+		Limite:    limite,
+		Curseur:   q.Get("curseur"),
+	})
 	if err != nil {
 		s.repondreErreurDossier(w, r, err)
 		return
 	}
-	ecrireJSON(w, http.StatusOK, map[string]any{
-		"status": "success", "dossiers": liste, "total": len(liste)})
+
+	// « total » est le nombre de dossiers que le filtre designe, non le
+	// nombre de lignes rendues : annoncer la taille de la page tromperait
+	// l'agent sur la charge de son agence.
+	//
+	// Il se deduit de la repartition plutot que d'un comptage a part : le
+	// chiffre y est deja, et une seconde requete couterait une traversee
+	// d'index de plus pour rien.
+	//
+	// La repartition n'est calculee qu'a la premiere page. Son cout croit
+	// avec le nombre de dossiers de l'agence — 41 ms pour deux cent mille —
+	// et les compteurs ne changent pas d'une page a l'autre : les recalculer
+	// a chaque page suivante serait payer ce prix pour le meme chiffre.
+	var repartition map[string]int64
+	var total int64
+	premierePage := q.Get("curseur") == ""
+	if premierePage {
+		repartition, err = s.dossiers.Repartition(r.Context(), agent)
+		if err != nil {
+			s.repondreErreurDossier(w, r, err)
+			return
+		}
+		if statut != "" {
+			total = repartition[statut]
+		} else {
+			for _, n := range repartition {
+				total += n
+			}
+		}
+	}
+
+	corps := map[string]any{
+		"status":   "success",
+		"dossiers": page.Dossiers,
+		"rendus":   len(page.Dossiers),
+	}
+	// Absents des pages suivantes plutot que nuls : le client garde ceux de
+	// la premiere page, et une valeur nulle lui ferait afficher zero.
+	if premierePage {
+		corps["total"] = total
+		corps["repartition"] = repartition
+	}
+	// Le curseur n'est rendu que s'il reste des dossiers : son absence dit
+	// au client qu'il tient la derniere page.
+	if page.CurseurSuivant != "" {
+		corps["curseur_suivant"] = page.CurseurSuivant
+	}
+	// La recherche restreint le resultat sans que la repartition, qui porte
+	// sur toute l'agence, ne le reflete. Le dire evite de laisser croire que
+	// les compteurs comptent les dossiers trouves.
+	if q.Get("recherche") != "" {
+		corps["recherche"] = q.Get("recherche")
+	}
+	ecrireJSON(w, http.StatusOK, corps)
 }
 
 func (s *Serveur) lireDossier(w http.ResponseWriter, r *http.Request) {

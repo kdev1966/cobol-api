@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -104,12 +105,11 @@ func TestUnDossierNeSortPasDeSonAgence(t *testing.T) {
 	_, _, agentA := agentDeTest(t, agents)
 	_, _, agentB := agentDeTest(t, agents)
 	// Deplacer le second dans une autre agence.
-	if _, err := pool.Exec(ctx,
-		`UPDATE agents SET agence = 'Sfax Nord' WHERE id = $1`,
-		agentB.ID); err != nil {
-		t.Fatalf("changement d'agence : %v", err)
+	// agentDeTest donne deja une agence propre a chacun : agentB ne doit rien
+	// voir des dossiers d'agentA.
+	if agentA.Agence == agentB.Agence {
+		t.Fatal("les deux agents partagent une agence, le test ne prouve rien")
 	}
-	agentB.Agence = "Sfax Nord"
 
 	cree := dossierDeTest(t, dossiers, agentA)
 
@@ -121,11 +121,11 @@ func TestUnDossierNeSortPasDeSonAgence(t *testing.T) {
 		t.Errorf("changement de statut : erreur %v, attendu ErrDossierAbsent", err)
 	}
 
-	liste, err := dossiers.Lister(ctx, agentB, "", 100)
+	page, err := dossiers.Lister(ctx, agentB, Filtre{Limite: 100})
 	if err != nil {
 		t.Fatalf("Lister : %v", err)
 	}
-	for _, d := range liste {
+	for _, d := range page.Dossiers {
 		if d.ID == cree.ID {
 			t.Error("un dossier d'une autre agence figure dans la liste")
 		}
@@ -245,12 +245,12 @@ func TestListerFiltreParStatut(t *testing.T) {
 		t.Fatalf("ChangerLeStatut : %v", err)
 	}
 
-	liste, err := dossiers.Lister(ctx, agent, "en_instruction", 100)
+	page, err := dossiers.Lister(ctx, agent, Filtre{Statut: "en_instruction", Limite: 100})
 	if err != nil {
 		t.Fatalf("Lister : %v", err)
 	}
 	vus := map[int64]bool{}
-	for _, d := range liste {
+	for _, d := range page.Dossiers {
 		vus[d.ID] = true
 		if d.Statut != "en_instruction" {
 			t.Errorf("dossier %d de statut %q dans un filtre en_instruction",
@@ -262,5 +262,186 @@ func TestListerFiltreParStatut(t *testing.T) {
 	}
 	if vus[garde.ID] {
 		t.Error("un brouillon figure dans le filtre en_instruction")
+	}
+}
+
+// La pagination par curseur doit parcourir tous les dossiers, sans en sauter
+// ni en rendre deux fois — ce qu'un OFFSET ne garantit pas quand des dossiers
+// sont crees pendant le parcours.
+func TestLaPaginationParcourtToutSansDoublon(t *testing.T) {
+	pool := ouvrir(t)
+	ctx := context.Background()
+	agents := NewAgents(pool)
+	dossiers := NewDossiers(pool)
+	_, _, agent := agentDeTest(t, agents)
+
+	const combien = 25
+	attendus := map[int64]bool{}
+	for i := 0; i < combien; i++ {
+		attendus[dossierDeTest(t, dossiers, agent).ID] = true
+	}
+
+	vus := map[int64]bool{}
+	curseur := ""
+	pages := 0
+	for {
+		page, err := dossiers.Lister(ctx, agent,
+			Filtre{Limite: 7, Curseur: curseur})
+		if err != nil {
+			t.Fatalf("Lister : %v", err)
+		}
+		pages++
+		if pages > 20 {
+			t.Fatal("la pagination ne s'arrete pas")
+		}
+		for _, d := range page.Dossiers {
+			if vus[d.ID] {
+				t.Errorf("dossier %d rendu deux fois", d.ID)
+			}
+			vus[d.ID] = true
+		}
+		if page.CurseurSuivant == "" {
+			break
+		}
+		curseur = page.CurseurSuivant
+	}
+
+	for id := range attendus {
+		if !vus[id] {
+			t.Errorf("dossier %d jamais rendu par la pagination", id)
+		}
+	}
+	// 25 dossiers par pages de 7 : quatre pages.
+	if pages != 4 {
+		t.Errorf("%d pages, attendu 4", pages)
+	}
+}
+
+// La derniere page ne rend pas de curseur : c'est ainsi que le client sait
+// qu'il a tout vu.
+func TestLaDernierePageNeRendPasDeCurseur(t *testing.T) {
+	pool := ouvrir(t)
+	ctx := context.Background()
+	agents := NewAgents(pool)
+	dossiers := NewDossiers(pool)
+	_, _, agent := agentDeTest(t, agents)
+
+	for i := 0; i < 3; i++ {
+		dossierDeTest(t, dossiers, agent)
+	}
+
+	page, err := dossiers.Lister(ctx, agent, Filtre{Limite: 100})
+	if err != nil {
+		t.Fatalf("Lister : %v", err)
+	}
+	if page.CurseurSuivant != "" {
+		t.Error("un curseur est rendu alors que tout tient sur une page")
+	}
+	if len(page.Dossiers) != 3 {
+		t.Errorf("%d dossiers, attendu 3", len(page.Dossiers))
+	}
+}
+
+func TestUnCurseurIllisibleEstRefuse(t *testing.T) {
+	pool := ouvrir(t)
+	agents := NewAgents(pool)
+	dossiers := NewDossiers(pool)
+	_, _, agent := agentDeTest(t, agents)
+
+	for _, curseur := range []string{
+		"pas du base64 !!", "Y2VjaQ", // « ceci », sans le separateur
+		"MjAyNi0wMS0wMXwx", // date non conforme au RFC 3339
+	} {
+		if _, err := dossiers.Lister(context.Background(), agent,
+			Filtre{Curseur: curseur}); !errors.Is(err, ErrCurseurInvalide) {
+			t.Errorf("curseur %q : erreur %v, attendu ErrCurseurInvalide",
+				curseur, err)
+		}
+	}
+}
+
+// La recherche porte sur un prefixe de reference, sans egard a la casse.
+func TestLaRechercheParPrefixeDeReference(t *testing.T) {
+	pool := ouvrir(t)
+	ctx := context.Background()
+	agents := NewAgents(pool)
+	dossiers := NewDossiers(pool)
+	_, _, agent := agentDeTest(t, agents)
+
+	marque := time.Now().Format("150405.000000000")
+	for _, suffixe := range []string{"A", "B", "C"} {
+		if _, err := dossiers.Creer(ctx, agent, Dossier{
+			Reference: "REF-" + marque + "-" + suffixe,
+			Capital:   "1000.000", Taux: "5.000000", Mois: 12,
+			Methode: "annuite_constante", TypeDiffere: "partiel",
+		}); err != nil {
+			t.Fatalf("Creer : %v", err)
+		}
+	}
+	// Un dossier hors de la recherche.
+	dossierDeTest(t, dossiers, agent)
+
+	page, err := dossiers.Lister(ctx, agent,
+		Filtre{Recherche: "ref-" + marque, Limite: 100})
+	if err != nil {
+		t.Fatalf("Lister : %v", err)
+	}
+	if len(page.Dossiers) != 3 {
+		t.Fatalf("%d dossiers trouves, attendu 3", len(page.Dossiers))
+	}
+	for _, d := range page.Dossiers {
+		if !strings.HasPrefix(strings.ToLower(d.Reference), "ref-"+marque) {
+			t.Errorf("reference %q hors du prefixe cherche", d.Reference)
+		}
+	}
+
+	// La casse ne compte pas.
+	majuscules, err := dossiers.Lister(ctx, agent,
+		Filtre{Recherche: "REF-" + marque, Limite: 100})
+	if err != nil {
+		t.Fatalf("Lister : %v", err)
+	}
+	if len(majuscules.Dossiers) != 3 {
+		t.Errorf("%d dossiers en majuscules, attendu 3", len(majuscules.Dossiers))
+	}
+}
+
+// Les caracteres generiques de LIKE doivent etre pris au pied de la lettre :
+// un souligne saisi par l'agent vaut un souligne, non « un caractere
+// quelconque ». Les references en portent couramment.
+func TestLaRechercheNeLaissePasPasserLesJokers(t *testing.T) {
+	pool := ouvrir(t)
+	ctx := context.Background()
+	agents := NewAgents(pool)
+	dossiers := NewDossiers(pool)
+	_, _, agent := agentDeTest(t, agents)
+
+	marque := time.Now().Format("150405.000000000")
+	if _, err := dossiers.Creer(ctx, agent, Dossier{
+		Reference: "JOK-" + marque + "-XY",
+		Capital:   "1000.000", Taux: "5.000000", Mois: 12,
+		Methode: "annuite_constante", TypeDiffere: "partiel",
+	}); err != nil {
+		t.Fatalf("Creer : %v", err)
+	}
+
+	// « JOK-<marque>-_Y » ne doit rien trouver : le souligne est litteral.
+	page, err := dossiers.Lister(ctx, agent,
+		Filtre{Recherche: "JOK-" + marque + "-_Y", Limite: 100})
+	if err != nil {
+		t.Fatalf("Lister : %v", err)
+	}
+	if len(page.Dossiers) != 0 {
+		t.Errorf("%d dossiers trouves, le souligne a servi de joker",
+			len(page.Dossiers))
+	}
+
+	// Et un pourcent seul ne doit pas tout rendre.
+	tout, err := dossiers.Lister(ctx, agent, Filtre{Recherche: "%", Limite: 100})
+	if err != nil {
+		t.Fatalf("Lister : %v", err)
+	}
+	if len(tout.Dossiers) != 0 {
+		t.Errorf("%d dossiers rendus pour la recherche « %% »", len(tout.Dossiers))
 	}
 }

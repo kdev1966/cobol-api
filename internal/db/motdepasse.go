@@ -30,9 +30,31 @@ const (
 // ErrEmpreinteInvalide signale une empreinte que ce code ne sait pas relire.
 var ErrEmpreinteInvalide = errors.New("empreinte de mot de passe illisible")
 
+// VerificationsSimultanees borne le nombre de calculs argon2id en parallele.
+//
+// Chacun reserve argonMemoire, soit 64 Mio : sans borne, seize connexions
+// simultanees en demandent un gigaoctet, et le service passe de quelques
+// dizaines de megaoctets a plus d'un gigaoctet. Mesure a l'appui, sur une
+// pile ou le reste du service tient dans une quinzaine de megaoctets.
+//
+// Quatre laisse un plafond de 256 Mio. Les connexions au-dela attendent leur
+// tour, ce qui ralentit d'autant une attaque par dictionnaire — un effet
+// recherche, non subi.
+const VerificationsSimultanees = 4
+
+// jetons borne les calculs concurrents. Un canal tampon plutot qu'un semaphore
+// de x/sync : la dependance ne se justifie pas pour quatre lignes.
+var jetons = make(chan struct{}, VerificationsSimultanees)
+
+func prendreUnJeton() { jetons <- struct{}{} }
+func rendreLeJeton()  { <-jetons }
+
 // HacherMotDePasse rend une empreinte argon2id au format PHC, qui porte ses
 // propres parametres.
 func HacherMotDePasse(motDePasse string) (string, error) {
+	prendreUnJeton()
+	defer rendreLeJeton()
+
 	sel := make([]byte, argonSel)
 	if _, err := rand.Read(sel); err != nil {
 		return "", fmt.Errorf("tirage du sel : %w", err)
@@ -81,8 +103,12 @@ func VerifierMotDePasse(motDePasse, empreinte string) (bool, error) {
 		return false, ErrEmpreinteInvalide
 	}
 
+	// Le jeton n'est pris qu'ici : les verifications de forme qui precedent
+	// ne coutent rien et n'ont pas a attendre.
+	prendreUnJeton()
 	calcule := argon2.IDKey([]byte(motDePasse), sel,
 		passes, memoire, parallelisme, uint32(len(attendu)))
+	rendreLeJeton()
 
 	return subtle.ConstantTimeCompare(calcule, attendu) == 1, nil
 }

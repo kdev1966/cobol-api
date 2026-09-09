@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { api, ErreurAPI, millimes, date, type Dossier, type Bareme } from '../api'
+import {
+  api,
+  ErreurAPI,
+  millimes,
+  entier,
+  date,
+  type Dossier,
+  type Bareme,
+  type Statut,
+} from '../api'
 import Etiquette from '../composants/Statut'
 import { libelleCategorie } from '../composants/libelles'
 
@@ -15,32 +24,81 @@ const statuts = [
 
 export default function Dossiers() {
   const [dossiers, poserDossiers] = useState<Dossier[]>([])
+  const [total, poserTotal] = useState(0)
+  const [repartition, poserRepartition] = useState<Record<string, number>>({})
+  const [curseur, poserCurseur] = useState<string | undefined>()
   const [filtre, poserFiltre] = useState('')
+  const [saisie, poserSaisie] = useState('')
+  const [recherche, poserRecherche] = useState('')
   const [erreur, poserErreur] = useState<string | null>(null)
   const [chargement, poserChargement] = useState(true)
+  const [suiteEnCours, poserSuiteEnCours] = useState(false)
   const [formulaireOuvert, poserFormulaireOuvert] = useState(false)
 
-  const charger = useCallback(async (statut: string) => {
-    poserChargement(true)
-    poserErreur(null)
+  // La premiere page remplace la liste ; les suivantes s'y ajoutent. C'est ce
+  // que le curseur permet : il n'y a pas de numero de page ou revenir.
+  const charger = useCallback(
+    async (statut: string, cherche: string) => {
+      poserChargement(true)
+      poserErreur(null)
+      try {
+        const rep = await api.listerDossiers({
+          statut: statut || undefined,
+          recherche: cherche || undefined,
+        })
+        poserDossiers(rep.dossiers)
+        poserTotal(rep.total ?? 0)
+        poserRepartition(rep.repartition ?? {})
+        poserCurseur(rep.curseur_suivant)
+      } catch (err) {
+        poserErreur(
+          err instanceof ErreurAPI ? err.message : 'Service injoignable',
+        )
+      } finally {
+        poserChargement(false)
+      }
+    },
+    [],
+  )
+
+  const chargerLaSuite = useCallback(async () => {
+    if (!curseur || suiteEnCours) return
+    poserSuiteEnCours(true)
     try {
-      const rep = await api.listerDossiers(statut || undefined)
-      poserDossiers(rep.dossiers)
+      const rep = await api.listerDossiers({
+        statut: filtre || undefined,
+        recherche: recherche || undefined,
+        curseur,
+      })
+      poserDossiers((d) => [...d, ...rep.dossiers])
+      poserCurseur(rep.curseur_suivant)
     } catch (err) {
       poserErreur(err instanceof ErreurAPI ? err.message : 'Service injoignable')
     } finally {
-      poserChargement(false)
+      poserSuiteEnCours(false)
     }
-  }, [])
+  }, [curseur, suiteEnCours, filtre, recherche])
 
   useEffect(() => {
-    void charger(filtre)
-  }, [charger, filtre])
+    void charger(filtre, recherche)
+  }, [charger, filtre, recherche])
+
+  // La recherche part apres une pause de frappe : interroger a chaque touche
+  // enverrait une requete par caractere sur une table d'un million de lignes.
+  useEffect(() => {
+    const minuteur = setTimeout(() => poserRecherche(saisie.trim()), 300)
+    return () => clearTimeout(minuteur)
+  }, [saisie])
 
   return (
     <section>
       <div className="entete-section">
-        <h2>Dossiers de l'agence</h2>
+        <h2>
+          Dossiers de l'agence{' '}
+          {!chargement && (
+            <span className="compte">{entier(total)}</span>
+          )}
+        </h2>
         <button onClick={() => poserFormulaireOuvert((o) => !o)}>
           {formulaireOuvert ? 'Fermer' : 'Nouveau dossier'}
         </button>
@@ -50,28 +108,65 @@ export default function Dossiers() {
         <NouveauDossier
           apresCreation={() => {
             poserFormulaireOuvert(false)
-            void charger(filtre)
+            void charger(filtre, recherche)
           }}
         />
       )}
 
-      <div className="filtres">
-        {statuts.map((s) => (
-          <button
-            key={s.valeur}
-            className={filtre === s.valeur ? 'actif' : ''}
-            onClick={() => poserFiltre(s.valeur)}
-          >
-            {s.libelle}
+      <div className="barre-recherche">
+        <input
+          value={saisie}
+          onChange={(e) => poserSaisie(e.target.value)}
+          placeholder="Rechercher une référence (début suffit)"
+          aria-label="Rechercher une référence"
+        />
+        {saisie && (
+          <button onClick={() => poserSaisie('')} title="Effacer">
+            Effacer
           </button>
-        ))}
+        )}
+      </div>
+
+      <div className="filtres">
+        {statuts.map((s) => {
+          // Le compte total figure en face de « Tous » ; les autres portent
+          // celui de leur statut, pris dans la repartition.
+          const n = s.valeur
+            ? repartition[s.valeur as Statut]
+            : Object.values(repartition).reduce((a, b) => a + b, 0)
+          return (
+            <button
+              key={s.valeur}
+              className={filtre === s.valeur ? 'actif' : ''}
+              onClick={() => poserFiltre(s.valeur)}
+            >
+              {s.libelle}
+              {n !== undefined && <span className="badge">{entier(n)}</span>}
+            </button>
+          )
+        })}
       </div>
 
       {erreur && <p className="erreur">{erreur}</p>}
       {chargement && <p className="discret">Chargement…</p>}
 
       {!chargement && dossiers.length === 0 && (
-        <p className="discret">Aucun dossier.</p>
+        <p className="discret">
+          {recherche
+            ? `Aucune référence ne commence par « ${recherche} ».`
+            : 'Aucun dossier.'}
+        </p>
+      )}
+
+      {/* La liste est bornee : dire lesquels sont affiches evite de laisser
+          croire que l'agence n'en compte que cinquante. Sous recherche, le
+          total porte sur l'agence et non sur le resultat : ne pas l'opposer
+          au nombre affiche eviterait de le laisser croire. */}
+      {!chargement && dossiers.length > 0 && !recherche && (
+        <p className="discret petit">
+          {entier(dossiers.length)} dossiers affichés sur {entier(total)}, du
+          plus récent au plus ancien.
+        </p>
       )}
 
       {dossiers.length > 0 && (
@@ -103,6 +198,14 @@ export default function Dossiers() {
             ))}
           </tbody>
         </table>
+      )}
+
+      {curseur && (
+        <div className="suite">
+          <button onClick={() => void chargerLaSuite()} disabled={suiteEnCours}>
+            {suiteEnCours ? 'Chargement…' : 'Afficher les suivants'}
+          </button>
+        </div>
       )}
     </section>
   )

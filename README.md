@@ -626,6 +626,43 @@ Un agent voit les dossiers de **son agence** et n'en voit aucun autre. Un
 dossier d'une autre agence rend `404`, non `403` : dire « ce dossier existe
 mais n'est pas le vôtre » renseignerait sur l'activité des autres agences.
 
+## Ce que la charge a montré
+
+Mesures sur huit cœurs, un million de dossiers dont **200 002 dans l'agence
+interrogée** — un volume délibérément excessif pour une agence bancaire.
+
+| Chemin | Débit à saturation | Ce qui plafonne |
+|---|---|---|
+| Lecture d'un dossier | **2 200 req/s** | la sérialisation JSON |
+| Page suivante (curseur) | **1 460 req/s** | idem |
+| Échéancier | **213 req/s** | le lancement du processus COBOL |
+| Connexion | **13 req/s** | argon2id, délibérément coûteux |
+
+Le moteur COBOL sature vers seize requêtes simultanées ; au-delà, seule la
+latence monte. C'est **le plafond réel du système** : environ 18 millions
+d'échéanciers par jour sur cette machine.
+
+Quatre défauts que ces mesures ont révélés, et qui sont corrigés :
+
+**Le champ `total` annonçait la taille de la page**, non le nombre de
+dossiers — 50 là où l'agence en comptait 200 002.
+
+**La liste filtrée par statut s'effondrait** : 259 ms, faute d'index sur
+`(agence, statut)`. Elle tient maintenant en 0,19 ms.
+
+**La recherche par référence n'utilisait pas son index** : `LIKE 'préfixe%'`
+exige `text_pattern_ops` hors collation C. 104 ms → 0,07 ms.
+
+**argon2id gonflait la mémoire à 1,5 Gio** sous seize connexions simultanées,
+chaque vérification réservant 64 Mio. Les calculs sont désormais bornés à
+quatre en parallèle : 72 Mio au repos, 523 Mio en pointe. Les connexions
+au-delà attendent leur tour, ce qui ralentit d'autant une attaque par
+dictionnaire — un effet recherché.
+
+Ce qui reste vrai à ce volume : le calcul des compteurs par statut coûte 41 ms
+pour 200 000 dossiers. Il n'est fait qu'à la première page. Une agence de dix
+mille dossiers, ordre de grandeur attendu, le paie en deux millisecondes.
+
 ## Le frontend
 
 Une application React servie séparément de l'API, derrière nginx.

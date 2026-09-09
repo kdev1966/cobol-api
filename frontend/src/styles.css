@@ -160,3 +160,31 @@ tbody tr:hover { background: #fafbfc; }
 .historique { margin: 0; padding-left: 1.2rem; }
 .historique li { margin-bottom: 0.3rem; }
 .note { color: var(--discret); }
+
+/* Comptes */
+.compte {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--discret);
+  background: #eceff3;
+  padding: 0.05rem 0.5rem;
+  border-radius: 10px;
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+}
+.badge {
+  margin-left: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--discret);
+  font-variant-numeric: tabular-nums;
+}
+.filtres button.actif .badge { color: var(--accent); }
+
+/* Recherche et pagination */
+.barre-recherche {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.barre-recherche input { margin-top: 0; max-width: 24rem; }
+.suite { margin-top: 0.75rem; text-align: center; }
