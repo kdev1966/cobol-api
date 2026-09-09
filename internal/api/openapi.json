@@ -750,6 +750,284 @@
           }
         }
       }
+    },
+    "/v1/auth/connexion": {
+      "post": {
+        "summary": "Ouvrir une session d'agent",
+        "description": "Rend un jeton porteur valable huit heures. L'identifiant inconnu et le mot de passe faux rendent le meme message : les distinguer permettrait d'enumerer les comptes.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "identifiant",
+                  "mot_de_passe"
+                ],
+                "properties": {
+                  "identifiant": {
+                    "type": "string"
+                  },
+                  "mot_de_passe": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session ouverte"
+          },
+          "401": {
+            "description": "Identifiant ou mot de passe incorrect"
+          }
+        }
+      }
+    },
+    "/v1/auth/deconnexion": {
+      "post": {
+        "summary": "Revoquer la session",
+        "description": "Revoquer un jeton deja absent n'est pas une erreur.",
+        "security": [
+          {
+            "SessionAgent": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Session revoquee"
+          }
+        }
+      }
+    },
+    "/v1/auth/moi": {
+      "get": {
+        "summary": "Titulaire de la session",
+        "description": "Permet au frontend de savoir au demarrage si son jeton vaut encore.",
+        "security": [
+          {
+            "SessionAgent": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Succes"
+          }
+        }
+      }
+    },
+    "/v1/dossiers": {
+      "get": {
+        "summary": "Lister les dossiers de l'agence",
+        "description": "Un agent voit les dossiers de son agence et n'en voit aucun autre.",
+        "security": [
+          {
+            "SessionAgent": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "statut",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "brouillon",
+                "en_instruction",
+                "accorde",
+                "refuse",
+                "annule"
+              ]
+            }
+          },
+          {
+            "name": "limite",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Succes"
+          }
+        }
+      },
+      "post": {
+        "summary": "Creer un dossier",
+        "description": "Le dossier nait en brouillon. La reference est unique par agence.",
+        "security": [
+          {
+            "SessionAgent": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Dossier"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Dossier cree"
+          },
+          "409": {
+            "description": "Reference deja employee"
+          }
+        }
+      }
+    },
+    "/v1/dossiers/{id}": {
+      "get": {
+        "summary": "Lire un dossier et son historique",
+        "description": "",
+        "security": [
+          {
+            "SessionAgent": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Succes"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Modifier un dossier",
+        "description": "Seul un brouillon est modifiable : une fois transmis a l'instruction, la decision doit porter sur ce qui a ete instruit.",
+        "security": [
+          {
+            "SessionAgent": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Dossier"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Dossier modifie"
+          },
+          "409": {
+            "description": "Dossier fige ou reference prise"
+          }
+        }
+      }
+    },
+    "/v1/dossiers/{id}/statut": {
+      "post": {
+        "summary": "Changer le statut",
+        "description": "Le cycle de vie est une machine a etats : brouillon vers en_instruction ou annule ; en_instruction vers accorde, refuse ou annule ; accorde, refuse et annule sont terminaux.",
+        "security": [
+          {
+            "SessionAgent": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "statut"
+                ],
+                "properties": {
+                  "statut": {
+                    "type": "string"
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Statut change"
+          },
+          "409": {
+            "description": "Transition refusee"
+          }
+        }
+      }
+    },
+    "/v1/dossiers/{id}/echeancier": {
+      "get": {
+        "summary": "Echeancier du dossier",
+        "description": "Calcule l'echeancier a partir des parametres du dossier et y rattache la simulation produite, qui porte le verdict de taux excessif.",
+        "security": [
+          {
+            "SessionAgent": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Succes"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -759,6 +1037,11 @@
         "in": "header",
         "name": "X-API-Key",
         "description": "Obligatoire en production ; le serveur refuse de demarrer sans elle."
+      },
+      "SessionAgent": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Jeton de session obtenu par POST /v1/auth/connexion. Le frontend etant servi depuis une autre origine, la session voyage dans l'en-tete Authorization plutot que dans un cookie : un jeton porteur n'est jamais envoye par le navigateur de lui-meme, ce qui supprime le risque CSRF. Le garder en memoire, non dans localStorage."
       }
     },
     "schemas": {
@@ -1367,6 +1650,152 @@
           "interets_economises": {
             "type": "number",
             "example": 49174.445
+          }
+        }
+      },
+      "Agent": {
+        "type": "object",
+        "description": "Compte d'agent de credit. Le mot de passe n'y figure jamais.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "example": 1
+          },
+          "identifiant": {
+            "type": "string",
+            "example": "amine.b"
+          },
+          "nom": {
+            "type": "string",
+            "example": "Amine Ben Salah"
+          },
+          "agence": {
+            "type": "string",
+            "example": "Tunis Centre"
+          },
+          "actif": {
+            "type": "boolean",
+            "example": true
+          },
+          "cree_le": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "derniere_connexion": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "Dossier": {
+        "type": "object",
+        "description": "Dossier de pret. Aucun champ ne porte de donnee a caractere personnel : la reference renvoie au systeme de la banque, ou l'identite de l'emprunteur reste. Ce choix garde le service hors du champ des obligations de la loi n° 2004-63.",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "reference": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "Reference du dossier dans le systeme de la banque ; unique par agence.",
+            "example": "PRT-2026-0001"
+          },
+          "agent_id": {
+            "type": "integer"
+          },
+          "agence": {
+            "type": "string",
+            "example": "Tunis Centre"
+          },
+          "statut": {
+            "type": "string",
+            "enum": [
+              "brouillon",
+              "en_instruction",
+              "accorde",
+              "refuse",
+              "annule"
+            ]
+          },
+          "capital": {
+            "type": "string",
+            "example": "250000.000"
+          },
+          "taux": {
+            "type": "string",
+            "example": "8.500000"
+          },
+          "mois": {
+            "type": "integer",
+            "example": 240
+          },
+          "methode": {
+            "type": "string"
+          },
+          "differe": {
+            "type": "integer"
+          },
+          "type_differe": {
+            "type": "string",
+            "enum": [
+              "partiel",
+              "total"
+            ]
+          },
+          "categorie": {
+            "type": "string",
+            "nullable": true
+          },
+          "simulation_id": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Derniere simulation rattachee, qui porte le verdict de taux excessif."
+          },
+          "cree_le": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "maj_le": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "transitions_possibles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Suites permises depuis le statut courant."
+          }
+        }
+      },
+      "Evenement": {
+        "type": "object",
+        "description": "Changement de statut : qui a decide quoi, et quand.",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "agent_id": {
+            "type": "integer"
+          },
+          "agent_nom": {
+            "type": "string"
+          },
+          "statut_avant": {
+            "type": "string",
+            "nullable": true
+          },
+          "statut_apres": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "cree_le": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       }

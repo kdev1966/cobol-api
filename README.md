@@ -530,6 +530,87 @@ n'apparaît nulle part.
 `?non_conformes=true` restreint aux prêts jugés excessifs, ce que demande un
 contrôle. La table porte un index partiel pour cette requête.
 
+## Les comptes et les dossiers
+
+Un dossier de prêt appartient à une **personne**, là où le moteur de calcul ne
+connaissait qu'une clé d'API partagée. D'où deux niveaux d'accès distincts :
+
+| | Ce que ça identifie | Comment |
+|---|---|---|
+| `X-API-Key` | un **système** appelant | clé partagée, en-tête `X-API-Key` |
+| Session d'agent | une **personne** | jeton porteur, en-tête `Authorization` |
+
+### Ce qui n'est jamais conservé en clair
+
+Le **mot de passe** : seule son empreinte argon2id est gardée, aux paramètres
+de la deuxième option du RFC 9106 (64 Mio, trois passes, parallélisme quatre).
+L'empreinte porte sa propre configuration, ce qui permettra d'en durcir les
+coûts sans invalider celles déjà calculées.
+
+Le **jeton de session** : seule son empreinte SHA-256 est gardée. Une base
+dérobée ne permet ni de se connecter, ni de reprendre une session en cours.
+
+L'identifiant inconnu et le mot de passe faux rendent **le même message**, et
+le mot de passe est vérifié contre une empreinte factice quand le compte
+n'existe pas — sans quoi la réponse serait plus rapide pour un identifiant
+inconnu, ce qui permettrait d'énumérer les comptes au chronomètre.
+
+### Pourquoi un jeton porteur et non un cookie
+
+Le frontend est servi depuis une **autre origine**. Un cookie transmis entre
+origines exigerait `SameSite=None`, donc une protection CSRF ; un jeton porteur
+n'est jamais envoyé par le navigateur de lui-même, ce qui supprime cette classe
+d'attaque.
+
+**La contrepartie** : un script injecté dans le frontend peut lire le jeton. Le
+frontend doit donc le garder **en mémoire**, et non dans `localStorage` où il
+survivrait à la fermeture de l'onglet.
+
+### Pas d'auto-inscription
+
+Les comptes se créent en ligne de commande :
+
+```sh
+printf 'un mot de passe solide\n' | cobol-api creer-agent \
+  -identifiant amine.b -nom "Amine Ben Salah" -agence "Tunis Centre"
+```
+
+Le mot de passe passe par l'entrée standard pour ne pas rester dans
+l'historique du shell. Ouvrir une route de création publique sur un service qui
+produit des offres de crédit n'aurait pas de sens.
+
+### Aucune donnée à caractère personnel
+
+Le dossier ne porte **ni nom, ni CIN, ni revenu**. Il porte la référence que la
+banque emploie déjà dans son propre système, où l'identité reste.
+
+Ce choix garde l'application **hors du champ des obligations de la loi
+n° 2004-63** relative à la protection des données à caractère personnel :
+déclaration à l'INPDP, consentement, droit d'accès et de rectification, durée
+de conservation. Si l'identité devait un jour entrer ici, ces obligations
+s'appliqueraient et le schéma devrait porter le consentement horodaté et une
+purge.
+
+### Le cycle de vie d'un dossier
+
+```
+brouillon ──> en_instruction ──> accordé
+    │               │      └───> refusé
+    └───> annulé <──┘
+```
+
+`accordé`, `refusé` et `annulé` sont **terminaux** : une décision ne se revient
+pas. Un brouillon ne s'accorde pas sans passer par l'instruction, et une fois
+transmis, **les paramètres du prêt ne bougent plus** — sinon la décision
+porterait sur autre chose que ce qui a été instruit.
+
+Chaque passage inscrit un événement avec son auteur et sa date. Un dossier de
+crédit doit pouvoir dire qui a décidé quoi.
+
+Un agent voit les dossiers de **son agence** et n'en voit aucun autre. Un
+dossier d'une autre agence rend `404`, non `403` : dire « ce dossier existe
+mais n'est pas le vôtre » renseignerait sur l'activité des autres agences.
+
 ## Architecture
 
 ```
@@ -570,6 +651,15 @@ privilégié et n'écrit rien sur disque.
 - La piste d'audit n'a ni purge ni rétention : elle croît indéfiniment.
 - Le différé total n'est pas offert au calcul de capacité, qui ne modélise pas
   la capitalisation.
+- Il n'y a pas de rôles : tout agent d'une agence peut instruire et décider les
+  dossiers de cette agence. Séparer le montage de la décision demanderait une
+  notion de rôle, et une règle disant qu'on ne décide pas son propre dossier.
+- Le mot de passe ne se change pas depuis l'API : seul un administrateur peut
+  recréer un compte. Un changement de mot de passe demanderait de révoquer les
+  sessions en cours.
+- Les sessions ne se purgent qu'à la demande : aucune tâche de fond ne balaie
+  les sessions échues. Elles sont refusées à la lecture, mais leurs lignes
+  restent.
 - Le remboursement anticipé, total ou partiel, est simulé : l'échéancier rendu
   reste celui du contrat. Un tableau d'amortissement réécrit après l'opération
   n'est pas proposé.

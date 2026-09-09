@@ -355,6 +355,103 @@ jobs:
             "$base$part&methode=in_fine&mode_remboursement_anticipe=duree_reduite")
           test "$code" = "400"
 
+      # Les dossiers appartiennent a une personne : ils sont gardes par une
+      # session d'agent, non par la cle d'API.
+      - name: Verifier les comptes et les dossiers
+        run: |
+          # Pas d'auto-inscription : le compte se cree en ligne de commande.
+          printf 'un mot de passe solide\n' | docker exec -i ci \
+            /app/cobol-api creer-agent -identifiant agent.ci \
+            -nom 'Agent CI' -agence 'Tunis Centre'
+
+          # Le mot de passe n'est jamais conserve en clair.
+          clair=$(PGPASSWORD=ci psql -h localhost -U postgres -d cobol_api -tAc \
+            "SELECT count(*) FROM agents WHERE mot_de_passe NOT LIKE '\$argon2id\$%'")
+          test "$clair" = "0"
+
+          rep=$(curl -sf -X POST -H 'Content-Type: application/json' \
+            -d '{"identifiant":"agent.ci","mot_de_passe":"un mot de passe solide"}' \
+            http://localhost:3000/v1/auth/connexion)
+          jeton=$(echo "$rep" | sed -n 's/.*"jeton":"\([^"]*\)".*/\1/p')
+          test -n "$jeton"
+
+          # Le jeton n'est pas conserve en clair non plus.
+          enclair=$(PGPASSWORD=ci psql -h localhost -U postgres -d cobol_api -tAc \
+            "SELECT count(*) FROM sessions WHERE encode(empreinte,'escape') = '$jeton'")
+          test "$enclair" = "0"
+
+          A="Authorization: Bearer $jeton"
+          curl -sf -H "$A" http://localhost:3000/v1/auth/moi | grep -q '"identifiant":"agent.ci"'
+
+          # Un mot de passe faux et un identifiant inconnu rendent le meme
+          # message : les distinguer permettrait d'enumerer les comptes.
+          a=$(curl -s -X POST -H 'Content-Type: application/json' \
+            -d '{"identifiant":"agent.ci","mot_de_passe":"faux"}' \
+            http://localhost:3000/v1/auth/connexion)
+          b=$(curl -s -X POST -H 'Content-Type: application/json' \
+            -d '{"identifiant":"personne","mot_de_passe":"faux"}' \
+            http://localhost:3000/v1/auth/connexion)
+          test "$a" = "$b"
+
+          # Un dossier sans session est refuse.
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/v1/dossiers)
+          test "$code" = "401"
+
+          # Cycle de vie complet.
+          d=$(curl -sf -X POST -H "$A" -H 'Content-Type: application/json' \
+            -d '{"reference":"PRT-CI-1","capital":"250000","taux":"8.5","mois":240,"categorie":"credits_logement"}' \
+            http://localhost:3000/v1/dossiers)
+          echo "$d" | grep -q '"statut":"brouillon"'
+          id=$(echo "$d" | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)
+
+          # La reference est unique dans l'agence.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$A" \
+            -H 'Content-Type: application/json' \
+            -d '{"reference":"PRT-CI-1","capital":"1000","taux":"5","mois":12}' \
+            http://localhost:3000/v1/dossiers)
+          test "$code" = "409"
+
+          # Un brouillon ne s'accorde pas sans passer par l'instruction.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$A" \
+            -H 'Content-Type: application/json' -d '{"statut":"accorde"}' \
+            "http://localhost:3000/v1/dossiers/$id/statut")
+          test "$code" = "409"
+
+          curl -sf -X POST -H "$A" -H 'Content-Type: application/json' \
+            -d '{"statut":"en_instruction","note":"transmis"}' \
+            "http://localhost:3000/v1/dossiers/$id/statut" | grep -q '"statut":"en_instruction"'
+
+          # Une fois instruit, les parametres ne bougent plus.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH -H "$A" \
+            -H 'Content-Type: application/json' \
+            -d '{"reference":"PRT-CI-1","capital":"999","taux":"5","mois":12}' \
+            "http://localhost:3000/v1/dossiers/$id")
+          test "$code" = "409"
+
+          curl -sf -X POST -H "$A" -H 'Content-Type: application/json' \
+            -d '{"statut":"accorde","note":"accord du comite"}' \
+            "http://localhost:3000/v1/dossiers/$id/statut" | grep -q '"statut":"accorde"'
+
+          # L'echeancier du dossier passe par le meme moteur, et la simulation
+          # produite y est rattachee.
+          e=$(curl -sf -H "$A" "http://localhost:3000/v1/dossiers/$id/echeancier")
+          echo "$e" | grep -q '"mensualite":2169.558'
+          echo "$e" | grep -q '"conforme":true'
+          sim=$(echo "$e" | sed -n 's/.*"simulation_id":\([0-9]*\).*/\1/p')
+          curl -sf -H "$A" "http://localhost:3000/v1/dossiers/$id" \
+            | grep -q "\"simulation_id\":$sim"
+
+          # L'historique retient qui a decide quoi.
+          h=$(curl -sf -H "$A" "http://localhost:3000/v1/dossiers/$id")
+          echo "$h" | grep -q '"agent_nom":"Agent CI"'
+          test "$(echo "$h" | grep -o '"statut_apres"' | wc -l | tr -d ' ')" = "3"
+
+          # La deconnexion revoque le jeton.
+          curl -sf -X POST -H "$A" http://localhost:3000/v1/auth/deconnexion
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "$A" \
+            http://localhost:3000/v1/auth/moi)
+          test "$code" = "401"
+
       - name: Verifier le bareme
         run: |
           liste=$(curl -sf -H 'X-API-Key: cle-de-ci' http://localhost:3000/v1/baremes)

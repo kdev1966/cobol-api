@@ -22,8 +22,19 @@ func agentDeTest(t *testing.T, a *Agents) (string, string, *Agent) {
 		t.Fatalf("Creer : %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = a.pool.Exec(context.Background(),
-			`DELETE FROM agents WHERE id = $1`, ag.ID)
+		ctx := context.Background()
+		// Les dossiers referencent l'agent sans cascade : en production on
+		// desactive un compte plutot que de le supprimer, justement pour que
+		// ses dossiers restent rattachables. Le menage de test doit donc
+		// retirer les dossiers avant le compte.
+		if _, err := a.pool.Exec(ctx,
+			`DELETE FROM dossiers WHERE agent_id = $1`, ag.ID); err != nil {
+			t.Errorf("menage des dossiers : %v", err)
+		}
+		if _, err := a.pool.Exec(ctx,
+			`DELETE FROM agents WHERE id = $1`, ag.ID); err != nil {
+			t.Errorf("menage de l'agent : %v", err)
+		}
 	})
 	return identifiant, motDePasse, ag
 }

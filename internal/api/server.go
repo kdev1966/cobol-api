@@ -70,7 +70,9 @@ type Serveur struct {
 	// agents est nil sans base : les comptes et les dossiers sont alors
 	// indisponibles, le moteur de calcul restant utilisable seul.
 	agents *db.Agents
-	mux    *http.ServeMux
+	// dossiers est nil sans base, comme agents.
+	dossiers *db.Dossiers
+	mux      *http.ServeMux
 }
 
 // NewServeur verifie la coherence de la configuration puis monte les routes.
@@ -98,6 +100,7 @@ func NewServeur(cfg Config, base *db.Pool) (*Serveur, error) {
 		s.baremes = db.NewBaremes(base)
 		s.audit = db.NewSimulations(base)
 		s.agents = db.NewAgents(base)
+		s.dossiers = db.NewDossiers(base)
 	}
 	s.monterRoutes()
 	return s, nil
@@ -133,6 +136,20 @@ func (s *Serveur) monterRoutes() {
 		enchainer(http.HandlerFunc(s.deconnexion), lim.intergiciel))
 	s.mux.Handle("GET /v1/auth/moi",
 		enchainer(http.HandlerFunc(s.moi), lim.intergiciel, s.gardeSession))
+
+	// Les dossiers appartiennent a une personne, pas a un systeme : ils sont
+	// gardes par la session, non par la cle d'API. Un agent voit les dossiers
+	// de son agence et n'en voit aucun autre.
+	agent := func(h http.HandlerFunc) http.Handler {
+		return enchainer(http.HandlerFunc(h), lim.intergiciel, s.gardeSession,
+			s.exigeDossiers)
+	}
+	s.mux.Handle("POST /v1/dossiers", agent(s.creerDossier))
+	s.mux.Handle("GET /v1/dossiers", agent(s.listerDossiers))
+	s.mux.Handle("GET /v1/dossiers/{id}", agent(s.lireDossier))
+	s.mux.Handle("PATCH /v1/dossiers/{id}", agent(s.modifierDossier))
+	s.mux.Handle("POST /v1/dossiers/{id}/statut", agent(s.changerLeStatut))
+	s.mux.Handle("GET /v1/dossiers/{id}/echeancier", agent(s.echeancierDossier))
 	s.mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ecrireErreur(w, http.StatusNotFound, "Ressource inconnue")
 	}))
@@ -362,7 +379,7 @@ func (s *Serveur) capacite(w http.ResponseWriter, r *http.Request) {
 	params.Capital = capacite.Capital.String()
 	params.Differe = q.Get("differe")
 	params.Tem, params.Categorie = q.Get("tem"), q.Get("categorie")
-	s.produireEcheancier(w, r, params, map[string]any{"capacite": capacite})
+	s.produireEcheancier(w, r, params, map[string]any{"capacite": capacite}, nil)
 }
 
 // bareme rend les taux effectifs moyens en vigueur, une ligne par categorie.
@@ -435,13 +452,18 @@ func (s *Serveur) echeancier(w http.ResponseWriter, r *http.Request) {
 		TypeDiffere:     q.Get("type_differe"),
 		Tem:             q.Get("tem"),
 		Categorie:       q.Get("categorie"),
-	}, nil)
+	}, nil, nil)
 }
 
 // produireEcheancier resout le bareme, calcule, trace et repond. Le calcul
 // inverse s'y branche apres avoir determine le capital.
+// rattacher est appele avec l'identifiant de la simulation inscrite, quand
+// l'appelant veut l'associer a autre chose — un dossier de pret. Nil pour les
+// routes publiques, qui ne rattachent rien. Le crochet est un parametre et non
+// un champ du serveur : celui-ci est partage entre requetes concurrentes.
 func (s *Serveur) produireEcheancier(w http.ResponseWriter, r *http.Request,
-	params loan.Parametres, supplement map[string]any) {
+	params loan.Parametres, supplement map[string]any,
+	rattacher func(int64) error) {
 
 	// La categorie et le taux effectif moyen designent la meme chose : l'un se
 	// lit dans le bareme, l'autre est impose. Les accepter ensemble ouvrirait
@@ -520,6 +542,16 @@ func (s *Serveur) produireEcheancier(w http.ResponseWriter, r *http.Request,
 	}
 	if resultat.Partiel != nil {
 		corps["remboursement_partiel"] = resultat.Partiel
+	}
+	// Le dossier retient la derniere simulation calculee : c'est elle qui
+	// porte le verdict de taux excessif sur lequel la decision s'appuiera.
+	if idSimulation != 0 && rattacher != nil {
+		if err := rattacher(idSimulation); err != nil {
+			slog.Error("rattachement de la simulation",
+				"id", IDRequete(r.Context()), "erreur", err)
+			ecrireErreur(w, http.StatusInternalServerError, "Erreur interne")
+			return
+		}
 	}
 	if idSimulation != 0 {
 		corps["simulation_id"] = idSimulation
