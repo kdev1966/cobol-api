@@ -611,6 +611,49 @@ Un agent voit les dossiers de **son agence** et n'en voit aucun autre. Un
 dossier d'une autre agence rend `404`, non `403` : dire « ce dossier existe
 mais n'est pas le vôtre » renseignerait sur l'activité des autres agences.
 
+## Le frontend
+
+Une application React servie séparément de l'API, derrière nginx.
+
+```
+navigateur ──> web (nginx, React)     :8080
+      └──────> cobol-api (Go + COBOL) :3000 ──> base (PostgreSQL)
+```
+
+Le frontend et l'API sont sur des **origines distinctes**. Deux conséquences :
+
+`CORS_ORIGINS` doit porter l'origine par laquelle le navigateur charge le
+frontend, sans quoi le navigateur refusera les réponses de l'API.
+
+`VITE_API_URL` est l'adresse par laquelle le **navigateur** joint l'API — non
+celle du réseau interne de Compose. Elle est **figée au build** de l'image :
+Vite substitue `import.meta.env` à la compilation, elle ne se lit pas au
+démarrage. La changer demande de rebâtir l'image du service `web`.
+
+### Le jeton ne quitte pas la mémoire
+
+Ni `localStorage`, ni cookie. Rafraîchir la page ou entrer une URL directement
+redemande donc une connexion — c'est le comportement voulu, pas un oubli : un
+jeton porteur dans `localStorage` survivrait à la fermeture de l'onglet et un
+script injecté pourrait l'y lire à loisir.
+
+### Aucun calcul dans le frontend
+
+La même discipline que dans le service Go : les montants viennent du COBOL et
+ne sont que **mis en forme** à l'affichage. Un flottant double représente
+exactement les millimes jusqu'à 2^53, soit bien au-delà de tout montant de
+crédit — le formatage est donc exact, et aucune addition n'est faite côté
+navigateur.
+
+### En développement
+
+```sh
+cd frontend && npm install && npm run dev
+```
+
+Vite mandate `/v1` vers `http://localhost:3000`, ce qui évite d'avoir à
+configurer CORS pour travailler.
+
 ## Architecture
 
 ```
@@ -657,6 +700,11 @@ privilégié et n'écrit rien sur disque.
 - Le mot de passe ne se change pas depuis l'API : seul un administrateur peut
   recréer un compte. Un changement de mot de passe demanderait de révoquer les
   sessions en cours.
+- Le frontend n'expose pas le simulateur public, le remboursement anticipé ni
+  le calcul de capacité : seuls les dossiers y sont montés. Ces routes restent
+  accessibles par l'API.
+- Un dossier ne se modifie pas depuis l'interface une fois créé, alors que
+  l'API le permet tant qu'il est en brouillon.
 - Les sessions ne se purgent qu'à la demande : aucune tâche de fond ne balaie
   les sessions échues. Elles sont refusées à la lecture, mais leurs lignes
   restent.

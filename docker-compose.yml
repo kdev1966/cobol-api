@@ -1,4 +1,11 @@
 # docker-compose.yml
+#
+# Trois services : PostgreSQL, l'API Go qui pilote les programmes COBOL, et le
+# frontend React servi par nginx.
+#
+# Le frontend est servi depuis une origine distincte de l'API. CORS_ORIGINS
+# doit donc porter l'origine du navigateur — celle par laquelle il joint le
+# frontend — sans quoi le navigateur refusera les reponses de l'API.
 
 services:
   base:
@@ -26,11 +33,27 @@ services:
       # refuse de demarrer en production. Voir .env.example.
       - API_KEY=${API_KEY:-}
       - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-30}
-      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      # L'origine depuis laquelle le navigateur charge le frontend.
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:8080}
       - DATABASE_URL=postgres://${POSTGRES_USER:-cobol_api}:${POSTGRES_PASSWORD}@base:5432/${POSTGRES_DB:-cobol_api}?sslmode=disable
     depends_on:
       base:
         condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        # Figee au build : Vite substitue import.meta.env a la compilation,
+        # l'origine ne peut pas se lire au demarrage du conteneur. C'est
+        # l'adresse par laquelle le NAVIGATEUR joint l'API, non celle du
+        # reseau interne de Compose.
+        - VITE_API_URL=${VITE_API_URL:-http://localhost:3000}
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      - cobol-api
     restart: unless-stopped
 
 volumes:

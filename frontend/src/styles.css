@@ -1,0 +1,162 @@
+:root {
+  --fond: #f6f7f9;
+  --carte: #ffffff;
+  --trait: #dfe3e8;
+  --texte: #1c2430;
+  --discret: #6b7683;
+  --accent: #1f5f8b;
+  --erreur: #a4262c;
+  --conforme: #1a7f4b;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--fond);
+  color: var(--texte);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+h1, h2, h3 { font-weight: 600; margin: 0 0 0.5rem; }
+h1 { font-size: 1.4rem; }
+h2 { font-size: 1.2rem; }
+h3 { font-size: 1rem; }
+
+a { color: var(--accent); }
+
+.discret { color: var(--discret); }
+.petit { font-size: 0.85rem; }
+.erreur { color: var(--erreur); font-weight: 500; }
+.nombre { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Connexion */
+.connexion {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+.connexion .carte { width: min(24rem, 100%); }
+
+/* Application */
+.application header {
+  background: var(--carte);
+  border-bottom: 1px solid var(--trait);
+  padding: 0.75rem 1.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.application header nav a {
+  text-decoration: none;
+  font-weight: 500;
+  padding: 0.25rem 0;
+  border-bottom: 2px solid transparent;
+}
+.application header nav a.active { border-bottom-color: var(--accent); }
+.agent { display: flex; align-items: center; gap: 0.75rem; }
+
+main { padding: 1.5rem; max-width: 68rem; margin: 0 auto; }
+
+.entete-section {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.carte {
+  background: var(--carte);
+  border: 1px solid var(--trait);
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+}
+
+/* Formulaires */
+label {
+  display: block;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+input, select {
+  display: block;
+  width: 100%;
+  margin-top: 0.25rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--trait);
+  border-radius: 4px;
+  font: inherit;
+  background: #fff;
+}
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+button {
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--trait);
+  border-radius: 4px;
+  background: var(--carte);
+  font: inherit;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+button:disabled { opacity: 0.5; cursor: default; }
+button[type='submit'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+button[type='submit']:hover:not(:disabled) { color: #fff; opacity: 0.9; }
+
+.grille {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0 1rem;
+}
+.actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.filtres { display: flex; gap: 0.4rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
+.filtres button.actif { border-color: var(--accent); color: var(--accent); font-weight: 500; }
+
+/* Tables */
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--trait); }
+th { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.02em; color: var(--discret); }
+tbody tr:hover { background: #fafbfc; }
+.defilement { overflow-x: auto; max-height: 30rem; overflow-y: auto; }
+
+/* Fiche */
+.fiche { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: 0.75rem; margin: 0; }
+.fiche dt { font-size: 0.8rem; color: var(--discret); }
+.fiche dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+/* Etiquettes de statut */
+.etiquette {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  vertical-align: middle;
+}
+.etiquette.brouillon { background: #eceff3; color: #4a5563; }
+.etiquette.en_instruction { background: #fff3d6; color: #8a6100; }
+.etiquette.accorde { background: #dff2e6; color: var(--conforme); }
+.etiquette.refuse { background: #fbe3e4; color: var(--erreur); }
+.etiquette.annule { background: #eceff3; color: var(--discret); }
+
+/* Verdict */
+.verdict { padding: 0.6rem 0.8rem; border-radius: 4px; margin: 0.75rem 0 0; }
+.verdict.conforme { background: #dff2e6; color: var(--conforme); }
+.verdict.excessif { background: #fbe3e4; color: var(--erreur); }
+
+.historique { margin: 0; padding-left: 1.2rem; }
+.historique li { margin-bottom: 0.3rem; }
+.note { color: var(--discret); }

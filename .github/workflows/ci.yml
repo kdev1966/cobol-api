@@ -97,6 +97,38 @@ jobs:
       - name: golangci-lint
         run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run ./...
 
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # npm ci plutot que npm install : il exige que le verrou soit coherent
+      # avec le manifeste, et une derive entre les deux doit casser la CI
+      # plutot que de passer inapercue.
+      - name: Installer les dependances
+        working-directory: frontend
+        run: npm ci
+
+      # Le typage est verifie a part du build : une erreur de type doit se
+      # signaler comme telle, non comme un echec de compilation.
+      - name: Verifier le typage
+        working-directory: frontend
+        run: npx tsc -b --noEmit
+
+      - name: Batir
+        working-directory: frontend
+        run: npm run build
+
+      - name: Verifier les vulnerabilites des dependances
+        working-directory: frontend
+        run: npm audit --audit-level=high
+
   image:
     name: Image et service
     runs-on: ubuntu-latest
